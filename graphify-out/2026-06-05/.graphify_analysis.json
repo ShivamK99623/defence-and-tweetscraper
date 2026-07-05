@@ -1,0 +1,389 @@
+{
+  "communities": {
+    "0": [
+      "charts_index",
+      "charts_index_barchartprops",
+      "charts_index_charttheme",
+      "charts_index_entitydoughnutchart",
+      "charts_index_entitydoughnutprops",
+      "charts_index_horizontalbarchart",
+      "charts_index_horizontalbarprops",
+      "charts_index_mediacolumnprops",
+      "charts_index_mediapiechart",
+      "charts_index_mediapieprops",
+      "charts_index_reactecharts",
+      "charts_index_simplebarchart",
+      "charts_index_stackedsentimentprops",
+      "charts_index_trendchart",
+      "charts_index_trendchartprops",
+      "common_exportbutton",
+      "common_exportbutton_exportbutton",
+      "common_exportbutton_exportbuttonprops",
+      "constants_index",
+      "constants_index_entity_colors",
+      "constants_index_entity_to_slug",
+      "constants_index_media_colors",
+      "constants_index_sentiment_colors",
+      "constants_index_sheet_name_map",
+      "constants_index_workbook_media_map",
+      "dashboard_entitydashboard_entitydashboardprops",
+      "dashboard_overviewdashboard",
+      "excel_normalizer_normalizeparams",
+      "excel_reader_rawsheetdata",
+      "tables_mediatabtable_mediatabtableprops",
+      "types_index_defenceentity",
+      "types_index_mediatype",
+      "types_index_topnewsitem"
+    ],
+    "1": [
+      "charts_chartcontainer",
+      "charts_chartcontainer_chartcontainer",
+      "charts_chartcontainer_chartcontainerprops",
+      "common_detailmodal",
+      "common_detailmodal_detailmodal",
+      "common_detailmodal_detailmodalprops",
+      "common_emptystate",
+      "common_emptystate_emptystate",
+      "common_emptystate_emptystateprops",
+      "excel_cache_cacheentry",
+      "lib_utils",
+      "lib_utils_cn",
+      "lib_utils_formatdate",
+      "lib_utils_formatdatetime",
+      "lib_utils_slugifyentity",
+      "lib_utils_truncate",
+      "tables_newstable",
+      "tables_newstable_newstableprops",
+      "types_index_newsrecord",
+      "ui_button",
+      "ui_button_button",
+      "ui_button_buttonprops",
+      "ui_button_buttonvariants",
+      "ui_dialog",
+      "ui_dialog_dialogcontent",
+      "ui_dialog_dialogheader",
+      "ui_dialog_dialogoverlay",
+      "ui_dialog_dialogtitle",
+      "ui_input",
+      "ui_input_input"
+    ],
+    "2": [
+      "constants_index_entity_slug_map",
+      "entity_route",
+      "entity_route_get",
+      "excel_analytics_generateentityanalytics",
+      "excel_cache",
+      "excel_cache_filterrecords",
+      "excel_cache_getcachedrecords",
+      "excel_cache_getcacheinfo",
+      "excel_cache_invalidatecache",
+      "excel_cache_paginaterecords",
+      "excel_index",
+      "excel_reader",
+      "excel_reader_data_dir",
+      "excel_reader_getavailableworkbooks",
+      "excel_reader_loadallrecords",
+      "excel_reader_readallworkbooks",
+      "excel_reader_readworkbook",
+      "excel_reader_resolveentityfromsheet",
+      "excel_reader_workbook_files",
+      "export_route",
+      "export_route_get",
+      "export_route_parsefilters",
+      "export_route_recordstoflatrows",
+      "export_route_tocsv",
+      "export_route_toxlsx",
+      "news_route",
+      "news_route_get",
+      "overview_route",
+      "overview_route_get"
+    ],
+    "3": [
+      "app_page",
+      "app_page_homepage",
+      "common_loadingskeleton",
+      "common_loadingskeleton_chartskeleton",
+      "common_loadingskeleton_kpiskeleton",
+      "common_loadingskeleton_loadingskeleton",
+      "common_loadingskeleton_pageskeleton",
+      "common_loadingskeleton_tableskeleton",
+      "dashboard_entitydashboard_entitydashboard",
+      "dashboard_entitypagetemplate",
+      "dashboard_entitypagetemplate_createentitypage",
+      "dashboard_entitypagetemplate_defenceministerpage",
+      "dashboard_entitypagetemplate_entity_pages",
+      "dashboard_entitypagetemplate_indianairforcepage",
+      "dashboard_entitypagetemplate_indianarmypage",
+      "dashboard_entitypagetemplate_indiancoastguardpage",
+      "dashboard_entitypagetemplate_indiannavypage",
+      "dashboard_overviewdashboard_overviewdashboard",
+      "defence_minister_page",
+      "filters_filterbar_filterbar",
+      "indian_air_force_page",
+      "indian_army_page",
+      "indian_coast_guard_page",
+      "indian_navy_page",
+      "layout_header",
+      "layout_header_header",
+      "layout_header_headerprops"
+    ],
+    "4": [
+      "cards_analyticscard",
+      "cards_analyticscard_analyticscard",
+      "cards_analyticscard_analyticscardprops",
+      "cards_kpigrid",
+      "cards_kpigrid_kpigrid",
+      "cards_kpigrid_kpigridprops",
+      "constants_index_defence_entities",
+      "constants_index_media_types",
+      "excel_analytics",
+      "excel_analytics_computekpis",
+      "excel_analytics_computesocialengagement",
+      "excel_analytics_extractnewsurl",
+      "excel_analytics_generateoverviewanalytics",
+      "excel_analytics_getdatekey",
+      "excel_analytics_gettopengagedministernews",
+      "excel_analytics_getuniquecolumnkeys",
+      "excel_analytics_groupcount",
+      "lib_utils_getnumericvalue",
+      "types_index",
+      "types_index_entityanalytics",
+      "types_index_entitydistribution",
+      "types_index_kpimetrics",
+      "types_index_mediadistribution",
+      "types_index_overviewanalytics",
+      "types_index_paginatedresponse",
+      "types_index_sentimenttype",
+      "types_index_trenddatapoint"
+    ],
+    "5": [
+      "charts_index_mediacolumnchart",
+      "charts_index_sentimentstackedchart",
+      "common_errorboundary",
+      "common_errorboundary_errorboundary",
+      "common_errorboundary_errorboundary_constructor",
+      "common_errorboundary_errorboundary_getderivedstatefromerror",
+      "common_errorboundary_errorboundary_render",
+      "common_errorboundary_props",
+      "common_errorboundary_state",
+      "dashboard_entitydashboard",
+      "hooks_useanalytics",
+      "hooks_useanalytics_buildquerystring",
+      "hooks_useanalytics_useentityanalytics",
+      "hooks_useanalytics_usenewsrecords",
+      "hooks_useanalytics_useoverviewanalytics",
+      "lib_utils_formatnumber",
+      "store_index_usefilterstore",
+      "tables_mediatabtable",
+      "tables_mediatabtable_mediatabtable",
+      "tables_mediatabtable_usemediatabcount",
+      "tables_newstable_newstable",
+      "ui_tabs",
+      "ui_tabs_tabscontent",
+      "ui_tabs_tabslist",
+      "ui_tabs_tabstrigger"
+    ],
+    "6": [
+      "constants_index_media_labels",
+      "filters_filterbar",
+      "filters_filterbar_filterbarprops",
+      "store_filter_store",
+      "store_filter_store_createfilterstore",
+      "store_filter_store_filter_keys",
+      "store_filter_store_filterstate",
+      "store_filter_store_filterstore",
+      "store_index",
+      "store_index_filterstore",
+      "types_index_newsfilters",
+      "ui_select",
+      "ui_select_selectcontent",
+      "ui_select_selectitem",
+      "ui_select_selecttrigger"
+    ],
+    "7": [
+      "app_layout",
+      "app_layout_inter",
+      "app_layout_metadata",
+      "app_layout_rootlayout",
+      "constants_index_nav_items",
+      "layout_dashboardlayout",
+      "layout_dashboardlayout_dashboardlayout",
+      "layout_dashboardlayout_dashboardlayoutprops",
+      "layout_sidebar",
+      "layout_sidebar_iconmap",
+      "layout_sidebar_sidebar",
+      "providers_queryprovider",
+      "providers_queryprovider_queryprovider"
+    ],
+    "8": [
+      "excel_column_mapper",
+      "excel_column_mapper_detectfieldmapping",
+      "excel_column_mapper_extractfieldvalue",
+      "excel_column_mapper_field_patterns",
+      "excel_column_mapper_fieldkey",
+      "excel_column_mapper_matchespattern",
+      "excel_column_mapper_normalizecolumnname",
+      "excel_normalizer",
+      "excel_normalizer_normalizerecord",
+      "lib_utils_normalizesentiment",
+      "lib_utils_parseexceldate"
+    ]
+  },
+  "cohesion": {
+    "0": 0.10416666666666667,
+    "1": 0.12873563218390804,
+    "2": 0.16748768472906403,
+    "3": 0.10541310541310542,
+    "4": 0.10541310541310542,
+    "5": 0.13666666666666666,
+    "6": 0.22857142857142856,
+    "7": 0.19230769230769232,
+    "8": 0.32727272727272727
+  },
+  "gods": [
+    {
+      "id": "types_index_defenceentity",
+      "label": "DefenceEntity",
+      "degree": 20
+    },
+    {
+      "id": "lib_utils_cn",
+      "label": "cn()",
+      "degree": 16
+    },
+    {
+      "id": "types_index_mediatype",
+      "label": "MediaType",
+      "degree": 16
+    },
+    {
+      "id": "store_index_usefilterstore",
+      "label": "useFilterStore",
+      "degree": 13
+    },
+    {
+      "id": "excel_cache_getcachedrecords",
+      "label": "getCachedRecords()",
+      "degree": 11
+    },
+    {
+      "id": "excel_cache_filterrecords",
+      "label": "filterRecords()",
+      "degree": 10
+    },
+    {
+      "id": "types_index_newsrecord",
+      "label": "NewsRecord",
+      "degree": 10
+    },
+    {
+      "id": "excel_analytics_generateoverviewanalytics",
+      "label": "generateOverviewAnalytics()",
+      "degree": 8
+    },
+    {
+      "id": "types_index_newsfilters",
+      "label": "NewsFilters",
+      "degree": 8
+    },
+    {
+      "id": "export_route_get",
+      "label": "GET()",
+      "degree": 7
+    }
+  ],
+  "surprises": [
+    {
+      "source": "LoadingSkeleton()",
+      "target": "cn()",
+      "source_files": [
+        "src/components/common/LoadingSkeleton.tsx",
+        "src/lib/utils.ts"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "bridges separate communities; peripheral node `LoadingSkeleton()` unexpectedly reaches hub `cn()`"
+    },
+    {
+      "source": "FilterBarProps",
+      "target": "DefenceEntity",
+      "source_files": [
+        "src/components/filters/FilterBar.tsx",
+        "src/types/index.ts"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "references",
+      "why": "bridges separate communities; peripheral node `FilterBarProps` unexpectedly reaches hub `DefenceEntity`"
+    },
+    {
+      "source": "GET()",
+      "target": "generateOverviewAnalytics()",
+      "source_files": [
+        "src/app/api/dashboard/overview/route.ts",
+        "src/services/excel/analytics.ts"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "calls",
+      "why": "bridges separate communities"
+    },
+    {
+      "source": "EntityDoughnutProps",
+      "target": "DefenceEntity",
+      "source_files": [
+        "src/components/charts/index.tsx",
+        "src/types/index.ts"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "references",
+      "why": "peripheral node `EntityDoughnutProps` unexpectedly reaches hub `DefenceEntity`"
+    },
+    {
+      "source": "MediaPieProps",
+      "target": "MediaType",
+      "source_files": [
+        "src/components/charts/index.tsx",
+        "src/types/index.ts"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "references",
+      "why": "peripheral node `MediaPieProps` unexpectedly reaches hub `MediaType`"
+    }
+  ],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `DefenceEntity` connect `Community 0` to `Community 2`, `Community 4`, `Community 5`, `Community 6`, `Community 8`?",
+      "why": "High betweenness centrality (0.068) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `MediaType` connect `Community 0` to `Community 2`, `Community 4`, `Community 5`, `Community 6`, `Community 8`?",
+      "why": "High betweenness centrality (0.046) - this node is a cross-community bridge."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `cn()` connect `Community 1` to `Community 3`, `Community 4`, `Community 5`, `Community 6`, `Community 7`?",
+      "why": "High betweenness centrality (0.038) - this node is a cross-community bridge."
+    },
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `inter`, `metadata`, `AnalyticsCardProps` to the rest of the system?",
+      "why": "30 weakly-connected nodes found - possible documentation gaps or missing edges."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `Community 0` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.10416666666666667 - nodes in this community are weakly interconnected."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `Community 1` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.12873563218390804 - nodes in this community are weakly interconnected."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `Community 3` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.10541310541310542 - nodes in this community are weakly interconnected."
+    }
+  ]
+}

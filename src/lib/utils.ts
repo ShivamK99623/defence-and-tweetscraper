@@ -186,7 +186,7 @@ export function formatDateTime(
   options?: { timeZone?: string }
 ): string {
   const date = toDisplayDate(dateStr);
-  if (!date) return dateStr ? dateStr : "—";
+  if (!date) return dateStr?.trim() ? dateStr.trim() : "—";
   return date.toLocaleString("en-IN", {
     day: "2-digit",
     month: "short",
@@ -194,11 +194,10 @@ export function formatDateTime(
     hour: "2-digit",
     minute: "2-digit",
     hour12: true,
-    ...(options?.timeZone ? { timeZone: options.timeZone } : {}),
+    timeZone: options?.timeZone ?? IST_TIMEZONE,
   });
 }
 
-export const UTC_TIMEZONE = "UTC";
 export const IST_TIMEZONE = "Asia/Kolkata";
 
 /** Calendar date (yyyy-MM-dd) in IST — used for filter bar date matching. */
@@ -226,6 +225,21 @@ export function parseDbDateTime(value: unknown): unknown {
   }
 
   return `${normalized}+05:30`;
+}
+
+/** Twitter / YouTube postedTime is UTC wall-clock in SQLite (no suffix). */
+export function parseDbUtcDateTime(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+
+  const str = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(str)) return value;
+
+  const normalized = str.replace(" ", "T");
+  if (normalized.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(normalized)) {
+    return normalized;
+  }
+
+  return `${normalized}Z`;
 }
 
 export function getNumericValue(value: unknown): number {

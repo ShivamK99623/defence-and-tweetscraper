@@ -11,25 +11,26 @@ import {
   SimpleBarChart,
 } from "@/components/charts";
 import { ExportButton } from "@/components/common/ExportButton";
+import { OverviewSearchPanel } from "@/components/dashboard/OverviewSearchPanel";
 import { PageSkeleton } from "@/components/common/LoadingSkeleton";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
-import { useOverviewAnalytics } from "@/hooks/useAnalytics";
+import { useOverviewDashboard } from "@/hooks/useAnalytics";
 import { useFilterStore } from "@/store";
 import { SENTIMENT_COLORS } from "@/constants";
 
 export const OverviewDashboard = memo(function OverviewDashboard() {
-  const { data, isLoading, error, refetch, isFetching } =
-    useOverviewAnalytics();
+  const { data, isLoading, error } = useOverviewDashboard();
   const router = useRouter();
   const setFilter = useFilterStore((s) => s.setFilter);
 
   if (isLoading) return <PageSkeleton />;
-  if (error || !data)
+  if (error || !data) {
     return (
       <div className="text-center text-red-600">
         Failed to load dashboard data
       </div>
     );
+  }
 
   const applyDrillDown = (key: string, value: string) => {
     setFilter(key as "sentiment" | "edition" | "website", value as never);
@@ -45,7 +46,9 @@ export const OverviewDashboard = memo(function OverviewDashboard() {
           <ExportButton />
         </div>
 
-        <KpiGrid kpis={data.kpis} />
+        <KpiGrid kpis={data.kpis} interactive={false} />
+
+        <OverviewSearchPanel />
 
         <div className="grid gap-6 lg:grid-cols-2">
           <EntityDoughnutChart data={data.entityDistribution} />

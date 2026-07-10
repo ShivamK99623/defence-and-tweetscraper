@@ -76,6 +76,7 @@ interface AnalyticsCardProps {
   trend?: "up" | "down" | "neutral";
   variant?: KpiCardVariant;
   onClick?: () => void;
+  selected?: boolean;
   className?: string;
 }
 
@@ -87,6 +88,7 @@ export const AnalyticsCard = memo(function AnalyticsCard({
   trend,
   variant = "default",
   onClick,
+  selected,
   className,
 }: AnalyticsCardProps) {
   const styles = VARIANT_STYLES[variant];
@@ -99,6 +101,7 @@ export const AnalyticsCard = memo(function AnalyticsCard({
         "relative overflow-hidden rounded-xl border p-3 shadow-sm transition-all sm:p-4",
         styles.card,
         onClick && "cursor-pointer hover:-translate-y-0.5 hover:shadow-md",
+        selected && "ring-2 ring-defence-green ring-offset-2",
         className
       )}
       onClick={onClick}

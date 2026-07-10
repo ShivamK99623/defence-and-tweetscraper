@@ -1,16 +1,16 @@
-# Graph Report - Defence Poc  (2026-07-05)
+# Graph Report - Defence Poc  (2026-07-10)
 
 ## Corpus Check
-- 69 files · ~23,271 words
+- 90 files · ~30,970 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 431 nodes · 1257 edges · 9 communities
+- 557 nodes · 1673 edges · 11 communities
 - Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `c5691c03`
+- Built from commit: `578dad23`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -22,92 +22,97 @@
 - [[_COMMUNITY_Analytics & KPI Types|Analytics & KPI Types]]
 - [[_COMMUNITY_Dashboard Hooks & Tables|Dashboard Hooks & Tables]]
 - [[_COMMUNITY_Filter Store & Bar|Filter Store & Bar]]
-- [[_COMMUNITY_App Layout & Navigation|App Layout & Navigation]]
+- [[_COMMUNITY_Community 7|Community 7]]
 - [[_COMMUNITY_Excel Normalization|Excel Normalization]]
+- [[_COMMUNITY_Community 12|Community 12]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `MediaType` - 35 edges
-2. `DefenceEntity` - 27 edges
+1. `MediaType` - 43 edges
+2. `DefenceEntity` - 31 edges
 3. `getModalFieldDisplay()` - 26 edges
 4. `cn()` - 23 edges
-5. `getCellValue()` - 22 edges
-6. `NewsRecord` - 19 edges
-7. `renderCell()` - 16 edges
-8. `normalizeDateRange()` - 15 edges
-9. `rawValue()` - 14 edges
-10. `useFilterStore` - 14 edges
+5. `NewsRecord` - 23 edges
+6. `getCellValue()` - 22 edges
+7. `sanitizeSearchQuery()` - 22 edges
+8. `normalizeDateRange()` - 17 edges
+9. `getDatabase()` - 17 edges
+10. `useFilterStore` - 17 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `FilterBarProps` --references--> `DefenceEntity`  [EXTRACTED]
-  src/components/filters/FilterBar.tsx → src/types/index.ts
 - `computeSocialEngagement()` --calls--> `getNumericValue()`  [EXTRACTED]
   src/services/excel/analytics.ts → src/lib/utils.ts
-- `parseFilters()` --calls--> `normalizeDateRange()`  [EXTRACTED]
-  src/app/api/export/pdf/route.ts → src/lib/date-range.ts
-- `parseFiltersFromBody()` --calls--> `normalizeDateRange()`  [EXTRACTED]
-  src/app/api/export/pdf/route.ts → src/lib/date-range.ts
-- `GET()` --calls--> `queryRecordsPaginated()`  [EXTRACTED]
-  src/app/api/news/route.ts → src/services/excel/query.ts
+- `ConstituencyFilters` --references--> `MediaType`  [EXTRACTED]
+  src/services/excel/constituency-query.ts → src/types/index.ts
+- `POST()` --calls--> `createUser()`  [EXTRACTED]
+  src/app/api/auth/users/route.ts → src/services/auth/users.ts
+- `GET()` --calls--> `normalizeDateRange()`  [EXTRACTED]
+  src/app/api/constituency/lucknow/route.ts → src/lib/date-range.ts
+- `GET()` --calls--> `sanitizeSearchQuery()`  [EXTRACTED]
+  src/app/api/dashboard/entity/[entity]/route.ts → src/lib/search.ts
 
 ## Import Cycles
 - None detected.
 
-## Communities (9 total, 0 thin omitted)
+## Communities (11 total, 0 thin omitted)
 
 ### Community 0 - "Charts & Visualization"
-Cohesion: 0.10
-Nodes (38): ENTITY_SLUG_MAP, GET(), computeKpis(), computeSocialEngagement(), generateEntityAnalytics(), generateOverviewAnalytics(), getDateKey(), getTopEngagedMinisterNews() (+30 more)
+Cohesion: 0.07
+Nodes (53): ENTITY_SLUG_MAP, GET(), computeKpis(), computeSocialEngagement(), dedupeRecordsBySource(), generateEntityAnalytics(), generateOverviewAnalytics(), getDateKey() (+45 more)
 
 ### Community 1 - "UI Primitives & Utils"
-Cohesion: 0.07
-Nodes (46): AnalyticsCard, AnalyticsCardProps, KpiCardVariant, VARIANT_STYLES, ChartContainer, ChartContainerProps, HorizontalBarChart, MediaColumnProps (+38 more)
+Cohesion: 0.05
+Nodes (62): AnalyticsCard, AnalyticsCardProps, KpiCardVariant, VARIANT_STYLES, ChartContainer, ChartContainerProps, HorizontalBarChart, MediaColumnProps (+54 more)
 
 ### Community 2 - "Excel API Routes"
-Cohesion: 0.10
-Nodes (62): MODAL_FIELDS_BY_MEDIA, ModalFieldConfig, ModalFieldId, ONLINE_TABLE_COLUMNS, PRINT_TABLE_COLUMNS, TABLE_COLUMNS_BY_MEDIA, TableColumnConfig, TableColumnId (+54 more)
+Cohesion: 0.08
+Nodes (70): DetailModal(), DetailModalProps, MODAL_FIELDS_BY_MEDIA, ModalFieldConfig, ModalFieldId, ONLINE_TABLE_COLUMNS, PRINT_TABLE_COLUMNS, TABLE_COLUMNS_BY_MEDIA (+62 more)
 
 ### Community 3 - "Entity Pages & Shell"
 Cohesion: 0.06
-Nodes (55): KpiGrid, KpiGridProps, BarChartProps, chartTheme, EntityDoughnutChart, EntityDoughnutProps, HorizontalBarProps, MediaColumnChart (+47 more)
+Nodes (63): KpiGrid, KpiGridProps, BarChartProps, chartTheme, EntityDoughnutChart, EntityDoughnutProps, HorizontalBarProps, MediaColumnChart (+55 more)
 
 ### Community 4 - "Analytics & KPI Types"
 Cohesion: 0.09
-Nodes (42): SHEET_NAME_MAP, WORKBOOK_MEDIA_MAP, DB_PATH, getDatabase(), getTableRowCount(), MEDIA_TABLES, tableExists(), buildCountQuery() (+34 more)
+Nodes (34): SHEET_NAME_MAP, WORKBOOK_MEDIA_MAP, hydrateConstituencyRecord(), DB_PATH, MEDIA_TABLES, DATA_DIR, getAvailableWorkbooks(), getRowSourceId() (+26 more)
 
 ### Community 5 - "Dashboard Hooks & Tables"
-Cohesion: 0.07
-Nodes (39): DetailModal(), DetailModalProps, CacheEntry, detectFieldMapping(), extractFieldValue(), FIELD_PATTERNS, FieldKey, matchesPattern() (+31 more)
+Cohesion: 0.12
+Nodes (26): detectFieldMapping(), extractFieldValue(), FIELD_PATTERNS, FieldKey, matchesPattern(), normalizeColumnName(), pickPublishedAtColumn(), PUBLISHED_AT_COLUMN_PRIORITY (+18 more)
 
 ### Community 6 - "Filter Store & Bar"
-Cohesion: 0.07
-Nodes (24): DateField(), DateRangeInput(), DateRangeInputProps, EmptyState(), EmptyStateProps, LoadingSkeleton(), EntityDashboard, DefenceMinisterPage (+16 more)
+Cohesion: 0.06
+Nodes (33): DateField(), DateRangeInput(), DateRangeInputProps, EmptyState(), EmptyStateProps, LoadingSkeleton(), PageSkeleton(), DefenceMinisterPage (+25 more)
 
-### Community 7 - "App Layout & Navigation"
-Cohesion: 0.13
-Nodes (24): DEFENCE_ENTITIES, ENTITY_COLORS, ENTITY_TO_SLUG, MEDIA_COLORS, MEDIA_LABELS, MEDIA_TYPES, buildFilterSummary(), buildReportData() (+16 more)
+### Community 7 - "Community 7"
+Cohesion: 0.11
+Nodes (27): DB_PATH, ensureDataDirectory(), getAuthDatabase(), runUserMigrations(), seedAdminUser(), createSessionToken(), getSecret(), getSessionUserId() (+19 more)
 
 ### Community 8 - "Excel Normalization"
-Cohesion: 0.16
-Nodes (10): inter, metadata, viewport, NAV_ITEMS, DashboardLayout(), DashboardLayoutProps, iconMap, Sidebar() (+2 more)
+Cohesion: 0.14
+Nodes (13): inter, metadata, viewport, NAV_ITEMS, AppShell(), AppShellProps, AUTH_PATHS, DashboardLayout() (+5 more)
+
+### Community 12 - "Community 12"
+Cohesion: 0.10
+Nodes (53): buildExpandedCte(), buildExpandedSelect(), engagementExpression(), headingColumn(), metricColumn(), normalizeFilters(), queryTopMinisterNews(), urlExpression() (+45 more)
 
 ## Knowledge Gaps
-- **63 isolated node(s):** `inter`, `metadata`, `viewport`, `VARIANT_STYLES`, `AnalyticsCardProps` (+58 more)
+- **79 isolated node(s):** `inter`, `metadata`, `viewport`, `VARIANT_STYLES`, `AnalyticsCardProps` (+74 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `MediaType` connect `Entity Pages & Shell` to `Charts & Visualization`, `UI Primitives & Utils`, `Excel API Routes`, `Analytics & KPI Types`, `Dashboard Hooks & Tables`, `App Layout & Navigation`?**
-  _High betweenness centrality (0.095) - this node is a cross-community bridge._
-- **Why does `DefenceEntity` connect `Entity Pages & Shell` to `Charts & Visualization`, `UI Primitives & Utils`, `Analytics & KPI Types`, `Dashboard Hooks & Tables`, `Filter Store & Bar`, `App Layout & Navigation`?**
-  _High betweenness centrality (0.041) - this node is a cross-community bridge._
-- **Why does `cn()` connect `Filter Store & Bar` to `UI Primitives & Utils`, `Excel API Routes`, `Entity Pages & Shell`, `Dashboard Hooks & Tables`, `Excel Normalization`?**
-  _High betweenness centrality (0.035) - this node is a cross-community bridge._
+- **Why does `MediaType` connect `Entity Pages & Shell` to `Charts & Visualization`, `UI Primitives & Utils`, `Excel API Routes`, `Analytics & KPI Types`, `Dashboard Hooks & Tables`, `Filter Store & Bar`, `Community 12`?**
+  _High betweenness centrality (0.088) - this node is a cross-community bridge._
+- **Why does `DefenceEntity` connect `Entity Pages & Shell` to `Charts & Visualization`, `UI Primitives & Utils`, `Analytics & KPI Types`, `Dashboard Hooks & Tables`, `Filter Store & Bar`, `Community 12`?**
+  _High betweenness centrality (0.038) - this node is a cross-community bridge._
+- **Why does `NewsRecord` connect `Excel API Routes` to `Charts & Visualization`, `UI Primitives & Utils`, `Entity Pages & Shell`, `Analytics & KPI Types`, `Dashboard Hooks & Tables`, `Filter Store & Bar`, `Community 12`?**
+  _High betweenness centrality (0.026) - this node is a cross-community bridge._
 - **What connects `inter`, `metadata`, `viewport` to the rest of the system?**
-  _63 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _79 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Charts & Visualization` be split into smaller, more focused modules?**
-  _Cohesion score 0.10460992907801418 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06919945725915876 - nodes in this community are weakly interconnected._
 - **Should `UI Primitives & Utils` be split into smaller, more focused modules?**
-  _Cohesion score 0.06838106370543542 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.05379746835443038 - nodes in this community are weakly interconnected._
 - **Should `Excel API Routes` be split into smaller, more focused modules?**
-  _Cohesion score 0.09761295822676896 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.0834144758195391 - nodes in this community are weakly interconnected._

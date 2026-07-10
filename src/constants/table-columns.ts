@@ -133,6 +133,7 @@ export const MODAL_FIELDS_BY_MEDIA: Record<MediaType, ModalFieldConfig[]> = {
     { id: "date", label: "Date" },
     { id: "language", label: "Language" },
     { id: "authors", label: "Authors" },
+    { id: "summary", label: "Summary" },
     { id: "content", label: "Content" },
   ],
   online: [
@@ -142,6 +143,8 @@ export const MODAL_FIELDS_BY_MEDIA: Record<MediaType, ModalFieldConfig[]> = {
     { id: "date", label: "Date" },
     { id: "language", label: "Language" },
     { id: "authors", label: "Authors" },
+    { id: "summary", label: "Summary" },
+    { id: "content", label: "Content" },
     { id: "link", label: "Link" },
   ],
   twitter: [
@@ -157,6 +160,7 @@ export const MODAL_FIELDS_BY_MEDIA: Record<MediaType, ModalFieldConfig[]> = {
     { id: "views", label: "Views" },
     { id: "engagement", label: "Engagement" },
     { id: "summary", label: "Summary" },
+    { id: "content", label: "Content" },
     { id: "link", label: "Link" },
   ],
   youtube: [
@@ -169,5 +173,8 @@ export const MODAL_FIELDS_BY_MEDIA: Record<MediaType, ModalFieldConfig[]> = {
     { id: "language", label: "Language" },
     { id: "commentCount", label: "Comment Count" },
     { id: "likeCount", label: "Like Count" },
+    { id: "summary", label: "Summary" },
+    { id: "content", label: "Content" },
+    { id: "link", label: "Link" },
   ],
 };

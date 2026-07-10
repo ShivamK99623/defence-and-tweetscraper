@@ -30,7 +30,7 @@ const tooltipStyles =
   "max-width: 260px; white-space: normal; word-break: break-word; line-height: 1.45;";
 
 interface EntityDoughnutProps {
-  data: { entity: DefenceEntity; count: number }[];
+  data: { entity: DefenceEntity | string; count: number }[];
 }
 
 export const EntityDoughnutChart = memo(function EntityDoughnutChart({
@@ -66,7 +66,10 @@ export const EntityDoughnutChart = memo(function EntityDoughnutChart({
         data: data.map((d) => ({
           name: d.entity,
           value: d.count,
-          itemStyle: { color: ENTITY_COLORS[d.entity] },
+          itemStyle: {
+            color:
+              ENTITY_COLORS[d.entity as DefenceEntity] ?? "#94a3b8",
+          },
         })),
       },
     ],

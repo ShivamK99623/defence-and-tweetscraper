@@ -12,7 +12,7 @@ import { ExportButton } from "@/components/common/ExportButton";
 import { PageSkeleton } from "@/components/common/LoadingSkeleton";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useEntityAnalytics } from "@/hooks/useAnalytics";
+import { useEntityDashboard } from "@/hooks/useAnalytics";
 import { useFilterStore } from "@/store";
 import { MEDIA_LABELS } from "@/constants";
 import type { DefenceEntity, EntityAnalytics, MediaType } from "@/types";
@@ -28,12 +28,12 @@ export const EntityDashboard = memo(function EntityDashboard({
   entity,
   entitySlug,
 }: EntityDashboardProps) {
-  const { data, isLoading, error } = useEntityAnalytics(entitySlug);
+  const { data, kpiData, isLoading, error } = useEntityDashboard(entitySlug);
   const filters = useFilterStore();
   const router = useRouter();
 
   if (isLoading) return <PageSkeleton />;
-  if (error || !data)
+  if (error || !data || !kpiData)
     return (
       <div className="text-center text-red-600">
         Failed to load entity dashboard
@@ -48,22 +48,22 @@ export const EntityDashboard = memo(function EntityDashboard({
   };
 
   const mediaCount = (mediaType: MediaType) =>
-    data.mediaWiseCount.find((m) => m.mediaType === mediaType)?.count ?? 0;
+    kpiData.mediaWiseCount.find((m) => m.mediaType === mediaType)?.count ?? 0;
 
   const entityKpis = {
-    ...data.kpis,
-    print: data.mediaWiseCount.find((m) => m.mediaType === "print")?.count ?? 0,
-    online: data.mediaWiseCount.find((m) => m.mediaType === "online")?.count ?? 0,
-    twitter: data.mediaWiseCount.find((m) => m.mediaType === "twitter")?.count ?? 0,
-    youtube: data.mediaWiseCount.find((m) => m.mediaType === "youtube")?.count ?? 0,
-    positivePercent: data.kpis.total
-      ? Math.round((data.kpis.positive / data.kpis.total) * 100)
+    ...kpiData.kpis,
+    print: kpiData.mediaWiseCount.find((m) => m.mediaType === "print")?.count ?? 0,
+    online: kpiData.mediaWiseCount.find((m) => m.mediaType === "online")?.count ?? 0,
+    twitter: kpiData.mediaWiseCount.find((m) => m.mediaType === "twitter")?.count ?? 0,
+    youtube: kpiData.mediaWiseCount.find((m) => m.mediaType === "youtube")?.count ?? 0,
+    positivePercent: kpiData.kpis.total
+      ? Math.round((kpiData.kpis.positive / kpiData.kpis.total) * 100)
       : 0,
-    negativePercent: data.kpis.total
-      ? Math.round((data.kpis.negative / data.kpis.total) * 100)
+    negativePercent: kpiData.kpis.total
+      ? Math.round((kpiData.kpis.negative / kpiData.kpis.total) * 100)
       : 0,
-    neutralPercent: data.kpis.total
-      ? Math.round((data.kpis.neutral / data.kpis.total) * 100)
+    neutralPercent: kpiData.kpis.total
+      ? Math.round((kpiData.kpis.neutral / kpiData.kpis.total) * 100)
       : 0,
   };
 

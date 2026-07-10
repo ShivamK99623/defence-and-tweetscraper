@@ -9,7 +9,20 @@ import type {
 } from "@/types";
 import { DEFENCE_ENTITIES, MEDIA_TYPES } from "@/constants";
 import { getNumericValue, isSheetSerialColumn, isUrlColumn, getIstCalendarDate } from "@/lib/utils";
+import { getRecordSourceKey } from "./reader-utils";
 import { parseISO, isValid } from "date-fns";
+
+/** One physical news row per media source — avoids inflating overview KPIs when multiple entities share a story. */
+function dedupeRecordsBySource(records: NewsRecord[]): NewsRecord[] {
+  const seen = new Map<string, NewsRecord>();
+  for (const record of records) {
+    const key = `${record.mediaType}:${getRecordSourceKey(record)}`;
+    if (!seen.has(key)) {
+      seen.set(key, record);
+    }
+  }
+  return Array.from(seen.values());
+}
 
 function computeKpis(records: NewsRecord[]): KpiMetrics {
   const total = records.length;
@@ -133,7 +146,8 @@ function getTopEngagedMinisterNews(
 export function generateOverviewAnalytics(
   records: NewsRecord[]
 ): OverviewAnalytics {
-  const kpis = computeKpis(records);
+  const uniqueRecords = dedupeRecordsBySource(records);
+  const kpis = computeKpis(uniqueRecords);
 
   const entityDistribution = DEFENCE_ENTITIES.map((entity) => ({
     entity,
@@ -142,18 +156,18 @@ export function generateOverviewAnalytics(
 
   const mediaDistribution = MEDIA_TYPES.map((mediaType) => ({
     mediaType,
-    count: records.filter((r) => r.mediaType === mediaType).length,
+    count: uniqueRecords.filter((r) => r.mediaType === mediaType).length,
   }));
 
-  const topPositiveNews = getTopEngagedMinisterNews(records, "positive");
-  const topNegativeNews = getTopEngagedMinisterNews(records, "negative");
+  const topPositiveNews = getTopEngagedMinisterNews(uniqueRecords, "positive");
+  const topNegativeNews = getTopEngagedMinisterNews(uniqueRecords, "negative");
 
   const trendMap = new Map<
     string,
     { print: number; online: number; twitter: number; youtube: number }
   >();
 
-  for (const r of records) {
+  for (const r of uniqueRecords) {
     const dateKey = getDateKey(r.publishedAt);
     if (!dateKey) continue;
     const entry = trendMap.get(dateKey) ?? {
@@ -178,13 +192,13 @@ export function generateOverviewAnalytics(
       total: counts.print + counts.online + counts.twitter + counts.youtube,
     }));
 
-  const topEditions = groupCount(records, (r) =>
+  const topEditions = groupCount(uniqueRecords, (r) =>
     r.edition ? r.edition : undefined
   )
     .slice(0, 10)
     .map(({ key, count }) => ({ edition: key, count }));
 
-  const onlineRecords = records.filter((r) => r.mediaType === "online");
+  const onlineRecords = uniqueRecords.filter((r) => r.mediaType === "online");
   const topOnlineSources = groupCount(onlineRecords, (r) =>
     r.website || r.publication ? (r.website ?? r.publication) : undefined
   )

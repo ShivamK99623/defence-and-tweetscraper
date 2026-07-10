@@ -1,6 +1,27 @@
 import { DEFENCE_ENTITIES } from "@/constants";
-import type { DefenceEntity, MediaType } from "@/types";
-import { parseDbDateTime } from "@/lib/utils";
+import type { DefenceEntity, MediaType, NewsRecord } from "@/types";
+import { parseDbDateTime, parseDbUtcDateTime } from "@/lib/utils";
+
+export function getRecordSourceKey(record: NewsRecord): string {
+  const { rawData, mediaType } = record;
+
+  if (mediaType === "youtube") {
+    return String(rawData.youtubeId ?? record.id);
+  }
+
+  return String(rawData.newsId ?? record.id);
+}
+
+export function getRowSourceKey(
+  row: Record<string, unknown>,
+  mediaType: MediaType
+): string {
+  if (mediaType === "youtube") {
+    return String(row.youtubeId ?? "");
+  }
+
+  return String(row.newsId ?? "");
+}
 
 export function parseCategories(categoryJson: unknown): DefenceEntity[] {
   if (categoryJson === null || categoryJson === undefined || categoryJson === "") {
@@ -36,19 +57,25 @@ function parseJsonArray(value: unknown): unknown {
   }
 }
 
-const DATE_FIELDS = new Set([
+const IST_DATE_FIELDS = new Set([
   "createdAt",
   "created_at",
-  "posted_time",
   "broadcast_time",
 ]);
+const UTC_DATE_FIELDS = new Set(["postedTime", "posted_time"]);
 
 function normalizeDateFields(row: Record<string, unknown>): Record<string, unknown> {
   const mapped = { ...row };
 
-  for (const field of DATE_FIELDS) {
+  for (const field of IST_DATE_FIELDS) {
     if (mapped[field] !== undefined) {
       mapped[field] = parseDbDateTime(mapped[field]);
+    }
+  }
+
+  for (const field of UTC_DATE_FIELDS) {
+    if (mapped[field] !== undefined) {
+      mapped[field] = parseDbUtcDateTime(mapped[field]);
     }
   }
 

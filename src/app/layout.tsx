@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import { AppShell } from "@/components/layout/AppShell";
 import { QueryProvider } from "@/components/providers/QueryProvider";
 
 const inter = Inter({
@@ -29,7 +29,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.variable} font-sans antialiased`}>
         <QueryProvider>
-          <DashboardLayout>{children}</DashboardLayout>
+          <AppShell>{children}</AppShell>
         </QueryProvider>
       </body>
     </html>

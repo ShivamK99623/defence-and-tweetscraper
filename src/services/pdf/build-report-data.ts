@@ -16,10 +16,9 @@ import {
   SENTIMENT_COLORS,
 } from "@/constants";
 import {
-  filterRecords,
-  generateEntityAnalytics,
-  generateOverviewAnalytics,
-  getCachedRecords,
+  queryEntityAnalytics,
+  queryOverviewAnalytics,
+  queryRecordsByIds,
 } from "@/services/excel";
 
 export interface EntityReportSection {
@@ -58,6 +57,18 @@ const ENTITY_TITLES: Record<DefenceEntity, string> = {
   "Indian Coast Guard": "Indian Coast Guard — Media Intelligence",
 };
 
+function groupRecordsByMedia(
+  records: NewsRecord[]
+): Record<MediaType, NewsRecord[]> {
+  return MEDIA_TYPES.reduce(
+    (acc, mediaType) => {
+      acc[mediaType] = records.filter((record) => record.mediaType === mediaType);
+      return acc;
+    },
+    {} as Record<MediaType, NewsRecord[]>
+  );
+}
+
 export function buildReportData(
   filters: NewsFilters = {},
   options?: {
@@ -65,47 +76,34 @@ export function buildReportData(
     selectedNewsIds?: string[];
   }
 ): ReportData {
-  const records = getCachedRecords();
-  const filtered = filterRecords(records, filters);
-  const overview = generateOverviewAnalytics(filtered);
-  const selectedSet = options?.selectedNewsIds?.length
-    ? new Set(options.selectedNewsIds)
-    : null;
+  const overview = queryOverviewAnalytics(filters);
+  const selectedIds = options?.selectedNewsIds ?? [];
 
   const entitiesToInclude = options?.entityOnly
-    ? DEFENCE_ENTITIES.filter((e) => e === options.entityOnly)
+    ? DEFENCE_ENTITIES.filter((entity) => entity === options.entityOnly)
     : DEFENCE_ENTITIES;
 
   const entities: EntityReportSection[] = entitiesToInclude.map((entity) => {
     const entityFilters: NewsFilters = { ...filters, entity };
-    const entityRecords = filterRecords(records, entityFilters);
-    const analytics = generateEntityAnalytics(entityRecords, entity);
+    const analytics = queryEntityAnalytics(entityFilters, entity);
 
-    const newsByMedia = MEDIA_TYPES.reduce(
-      (acc, mediaType) => {
-        const mediaRecords = entityRecords.filter(
-          (r) => r.mediaType === mediaType
-        );
-        acc[mediaType] = selectedSet
-          ? mediaRecords.filter((r) => selectedSet.has(r.id))
-          : [];
-        return acc;
-      },
-      {} as Record<MediaType, NewsRecord[]>
-    );
+    const selectedRecords =
+      selectedIds.length > 0
+        ? queryRecordsByIds(entityFilters, selectedIds)
+        : [];
 
     return {
       entity,
       slug: ENTITY_TO_SLUG[entity],
       title: ENTITY_TITLES[entity],
       analytics,
-      newsByMedia,
+      newsByMedia: groupRecordsByMedia(selectedRecords),
     };
   });
 
   const filterParts = [buildFilterSummary(filters)];
-  if (selectedSet) {
-    filterParts.push(`${selectedSet.size} selected news items`);
+  if (selectedIds.length > 0) {
+    filterParts.push(`${selectedIds.length} selected news items`);
   }
 
   return {
@@ -146,7 +144,7 @@ export function overviewDistributionItems(overview: OverviewAnalytics) {
     entityItems: overview.entityDistribution.map((d) => ({
       label: d.entity,
       value: d.count,
-      color: ENTITY_COLORS[d.entity],
+      color: ENTITY_COLORS[d.entity as DefenceEntity] ?? "#94a3b8",
     })),
     mediaItems: overview.mediaDistribution.map((d) => ({
       label: MEDIA_LABELS[d.mediaType],

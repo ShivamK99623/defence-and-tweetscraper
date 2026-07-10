@@ -5,7 +5,6 @@ import {
   formatDateTime,
   formatNumber,
   getNumericValue,
-  IST_TIMEZONE,
 } from "@/lib/utils";
 
 function findColumn(record: NewsRecord, patterns: RegExp[]): string | undefined {
@@ -195,9 +194,6 @@ export function getRecordEnglishTranslation(record: NewsRecord): string | undefi
 }
 
 export function getRecordDate(record: NewsRecord): string {
-  if (record.mediaType === "twitter") {
-    return formatDateTime(record.publishedAt, { timeZone: IST_TIMEZONE });
-  }
   return formatDateTime(record.publishedAt);
 }
 

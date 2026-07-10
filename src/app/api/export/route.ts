@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
 import {
-  getCachedRecords,
-  filterRecords,
+  EXPORT_BATCH_SIZE,
+  MAX_EXPORT_ROWS,
+  countRecords,
+  forEachRecordsBatch,
+  queryRecordsByIds,
 } from "@/services/excel";
 import { ENTITY_SLUG_MAP } from "@/constants";
-import type { DefenceEntity, MediaType, NewsFilters } from "@/types";
+import type { DefenceEntity, MediaType, NewsFilters, NewsRecord } from "@/types";
 import ExcelJS from "exceljs";
 import { isSheetSerialColumn } from "@/lib/utils";
 import { normalizeDateRange } from "@/lib/date-range";
+import { sanitizeSearchQuery } from "@/lib/search";
 
 function parseFilters(searchParams: URLSearchParams): NewsFilters {
   const filters: NewsFilters = {};
@@ -30,8 +34,10 @@ function parseFilters(searchParams: URLSearchParams): NewsFilters {
     filters.website = searchParams.get("website")!;
   if (searchParams.get("edition"))
     filters.edition = searchParams.get("edition")!;
-  if (searchParams.get("search"))
-    filters.search = searchParams.get("search")!;
+  if (searchParams.get("search")) {
+    const sanitized = sanitizeSearchQuery(searchParams.get("search"));
+    if (sanitized) filters.search = sanitized;
+  }
 
   const { startDate, endDate } = normalizeDateRange({
     startDate: searchParams.get("startDate") ?? undefined,
@@ -43,80 +49,121 @@ function parseFilters(searchParams: URLSearchParams): NewsFilters {
   return filters;
 }
 
-function recordsToFlatRows(
-  records: ReturnType<typeof getCachedRecords>
-): Record<string, unknown>[] {
-  return records.map((r, index) => {
-    const rawEntries = Object.entries(r.rawData).filter(
-      ([key]) => !isSheetSerialColumn(key)
-    );
-
-    return {
-      Sr: index + 1,
-      id: r.id,
-      entity: r.entity,
-      mediaType: r.mediaType,
-      heading: r.heading,
-      summary: r.summary,
-      sentiment: r.sentiment,
-      publication: r.publication,
-      website: r.website,
-      edition: r.edition,
-      language: r.language,
-      author: r.author,
-      publishedAt: r.publishedAt,
-      ...Object.fromEntries(rawEntries),
-    };
-  });
-}
-
-function toCsv(rows: Record<string, unknown>[]): string {
-  if (rows.length === 0) return "";
-
-  const headers = Array.from(
-    rows.reduce((set, row) => {
-      Object.keys(row).forEach((k) => set.add(k));
-      return set;
-    }, new Set<string>())
+function recordToFlatRow(
+  record: NewsRecord,
+  serial: number
+): Record<string, unknown> {
+  const rawEntries = Object.entries(record.rawData).filter(
+    ([key]) => !isSheetSerialColumn(key)
   );
 
-  const escape = (val: unknown) => {
-    const str = val === null || val === undefined ? "" : String(val);
-    if (str.includes(",") || str.includes('"') || str.includes("\n")) {
-      return `"${str.replace(/"/g, '""')}"`;
+  return {
+    Sr: serial,
+    id: record.id,
+    entity: record.entity,
+    mediaType: record.mediaType,
+    heading: record.heading,
+    summary: record.summary,
+    sentiment: record.sentiment,
+    publication: record.publication,
+    website: record.website,
+    edition: record.edition,
+    language: record.language,
+    author: record.author,
+    publishedAt: record.publishedAt,
+    ...Object.fromEntries(rawEntries),
+  };
+}
+
+function escapeCsv(val: unknown): string {
+  const str = val === null || val === undefined ? "" : String(val);
+  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function collectHeaders(rows: Record<string, unknown>[]): string[] {
+  const headers = new Set<string>();
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      headers.add(key);
     }
-    return str;
+  }
+  return Array.from(headers);
+}
+
+async function buildCsv(filters: NewsFilters, newsIds: string[]): Promise<string> {
+  const lines: string[] = [];
+  let headers: string[] | null = null;
+  let serial = 0;
+
+  const writeBatch = (records: NewsRecord[]) => {
+    const rows = records.map((record) => {
+      serial += 1;
+      return recordToFlatRow(record, serial);
+    });
+
+    if (rows.length === 0) return;
+
+    if (!headers) {
+      headers = collectHeaders(rows);
+      lines.push(headers.join(","));
+    }
+
+    for (const row of rows) {
+      lines.push(headers.map((header) => escapeCsv(row[header])).join(","));
+    }
   };
 
-  const lines = [
-    headers.join(","),
-    ...rows.map((row) => headers.map((h) => escape(row[h])).join(",")),
-  ];
+  if (newsIds.length > 0) {
+    writeBatch(queryRecordsByIds(filters, newsIds));
+    return lines.join("\n");
+  }
+
+  forEachRecordsBatch(filters, EXPORT_BATCH_SIZE, (records) => {
+    writeBatch(records);
+  });
+
   return lines.join("\n");
 }
 
-async function toXlsx(rows: Record<string, unknown>[]): Promise<Buffer> {
+async function buildXlsx(
+  filters: NewsFilters,
+  newsIds: string[]
+): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Defence News Export");
+  let headers: string[] | null = null;
+  let serial = 0;
 
-  if (rows.length === 0) {
-    const buffer = await workbook.xlsx.writeBuffer();
-    return Buffer.from(buffer);
+  const writeBatch = (records: NewsRecord[]) => {
+    const rows = records.map((record) => {
+      serial += 1;
+      return recordToFlatRow(record, serial);
+    });
+
+    if (rows.length === 0) return;
+
+    if (!headers) {
+      headers = collectHeaders(rows);
+      sheet.addRow(headers);
+      sheet.getRow(1).font = { bold: true };
+    }
+
+    for (const row of rows) {
+      sheet.addRow(headers!.map((header) => row[header] ?? ""));
+    }
+  };
+
+  if (newsIds.length > 0) {
+    writeBatch(queryRecordsByIds(filters, newsIds));
+  } else {
+    forEachRecordsBatch(filters, EXPORT_BATCH_SIZE, (records) => {
+      writeBatch(records);
+    });
   }
 
-  const headers = Array.from(
-    rows.reduce((set, row) => {
-      Object.keys(row).forEach((k) => set.add(k));
-      return set;
-    }, new Set<string>())
-  );
-
-  sheet.addRow(headers);
-  for (const row of rows) {
-    sheet.addRow(headers.map((h) => row[h] ?? ""));
-  }
-
-  sheet.getRow(1).font = { bold: true };
   const buffer = await workbook.xlsx.writeBuffer();
   return Buffer.from(buffer);
 }
@@ -126,16 +173,23 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const format = searchParams.get("format") ?? "csv";
     const filters = parseFilters(searchParams);
+    const newsIds = searchParams.getAll("newsIds");
 
-    const records = getCachedRecords();
-    const filtered = filterRecords(records, filters);
-    const rows = recordsToFlatRows(filtered);
+    if (newsIds.length === 0 && countRecords(filters) > MAX_EXPORT_ROWS) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Export limited to ${MAX_EXPORT_ROWS.toLocaleString()} rows. Narrow your filters.`,
+        },
+        { status: 400 }
+      );
+    }
 
     const timestamp = new Date().toISOString().slice(0, 10);
     const filename = `defence-news-export-${timestamp}`;
 
     if (format === "xlsx") {
-      const buffer = await toXlsx(rows);
+      const buffer = await buildXlsx(filters, newsIds);
       return new NextResponse(new Uint8Array(buffer), {
         headers: {
           "Content-Type":
@@ -145,7 +199,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const csv = toCsv(rows);
+    const csv = await buildCsv(filters, newsIds);
     return new NextResponse(csv, {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",

@@ -20,21 +20,32 @@ interface KpiGridProps {
   kpis: KpiMetrics;
   showMediaBreakdown?: boolean;
   entitySlug?: string;
+  interactive?: boolean;
 }
 
 export const KpiGrid = memo(function KpiGrid({
   kpis,
   showMediaBreakdown = true,
+  interactive = true,
 }: KpiGridProps) {
   const router = useRouter();
   const setFilter = useFilterStore((s) => s.setFilter);
+  const sentiment = useFilterStore((s) => s.sentiment);
+  const mediaType = useFilterStore((s) => s.mediaType);
 
-  const applyFilter = (key: string, value: string) => {
-    setFilter(key as "sentiment" | "mediaType", value as never);
+  const applyFilter = (key: "sentiment" | "mediaType", value: string) => {
+    const current = useFilterStore.getState()[key];
+    const next = current === value ? undefined : value;
+    setFilter(key, next as never);
     const params = new URLSearchParams(window.location.search);
-    params.set(key, value);
+    if (next) params.set(key, next);
+    else params.delete(key);
     router.replace(`?${params.toString()}`, { scroll: false });
   };
+
+  const isSelected = (key: "sentiment" | "mediaType", value: string) =>
+    interactive &&
+    (key === "sentiment" ? sentiment === value : mediaType === value);
 
   const cards = [
     {
@@ -50,7 +61,8 @@ export const KpiGrid = memo(function KpiGrid({
       icon: <ThumbsUp className="h-5 w-5" />,
       variant: "positive" as const,
       trend: "up" as const,
-      onClick: () => applyFilter("sentiment", "positive"),
+      onClick: interactive ? () => applyFilter("sentiment", "positive") : undefined,
+      selected: isSelected("sentiment", "positive"),
     },
     {
       title: "Negative",
@@ -59,7 +71,8 @@ export const KpiGrid = memo(function KpiGrid({
       icon: <ThumbsDown className="h-5 w-5" />,
       variant: "negative" as const,
       trend: "down" as const,
-      onClick: () => applyFilter("sentiment", "negative"),
+      onClick: interactive ? () => applyFilter("sentiment", "negative") : undefined,
+      selected: isSelected("sentiment", "negative"),
     },
     {
       title: "Neutral",
@@ -68,7 +81,8 @@ export const KpiGrid = memo(function KpiGrid({
       icon: <Minus className="h-5 w-5" />,
       variant: "neutral" as const,
       trend: "neutral" as const,
-      onClick: () => applyFilter("sentiment", "neutral"),
+      onClick: interactive ? () => applyFilter("sentiment", "neutral") : undefined,
+      selected: isSelected("sentiment", "neutral"),
     },
   ];
 
@@ -82,7 +96,8 @@ export const KpiGrid = memo(function KpiGrid({
             : 0,
           icon: <Printer className="h-5 w-5" />,
           variant: "print" as const,
-          onClick: () => applyFilter("mediaType", "print"),
+          onClick: interactive ? () => applyFilter("mediaType", "print") : undefined,
+          selected: isSelected("mediaType", "print"),
         },
         {
           title: "Online",
@@ -92,7 +107,8 @@ export const KpiGrid = memo(function KpiGrid({
             : 0,
           icon: <Globe className="h-5 w-5" />,
           variant: "online" as const,
-          onClick: () => applyFilter("mediaType", "online"),
+          onClick: interactive ? () => applyFilter("mediaType", "online") : undefined,
+          selected: isSelected("mediaType", "online"),
         },
         {
           title: "Twitter",
@@ -102,7 +118,8 @@ export const KpiGrid = memo(function KpiGrid({
             : 0,
           icon: <RiTwitterXFill className="h-5 w-5" />,
           variant: "twitter" as const,
-          onClick: () => applyFilter("mediaType", "twitter"),
+          onClick: interactive ? () => applyFilter("mediaType", "twitter") : undefined,
+          selected: isSelected("mediaType", "twitter"),
         },
         {
           title: "YouTube",
@@ -112,7 +129,8 @@ export const KpiGrid = memo(function KpiGrid({
             : 0,
           icon: <FaYoutube className="h-5 w-5" />,
           variant: "youtube" as const,
-          onClick: () => applyFilter("mediaType", "youtube"),
+          onClick: interactive ? () => applyFilter("mediaType", "youtube") : undefined,
+          selected: isSelected("mediaType", "youtube"),
         },
       ]
     : [];

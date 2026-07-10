@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { queryRecordsPaginated } from "@/services/excel";
 import { ENTITY_SLUG_MAP } from "@/constants";
 import { normalizeDateRange } from "@/lib/date-range";
+import { sanitizeSearchQuery } from "@/lib/search";
 import type { DefenceEntity, MediaType, NewsFilters } from "@/types";
 
 function parseFilters(searchParams: URLSearchParams): NewsFilters {
@@ -26,8 +27,10 @@ function parseFilters(searchParams: URLSearchParams): NewsFilters {
     filters.website = searchParams.get("website")!;
   if (searchParams.get("edition"))
     filters.edition = searchParams.get("edition")!;
-  if (searchParams.get("search"))
-    filters.search = searchParams.get("search")!;
+  if (searchParams.get("search")) {
+    const sanitized = sanitizeSearchQuery(searchParams.get("search"));
+    if (sanitized) filters.search = sanitized;
+  }
 
   const { startDate, endDate } = normalizeDateRange({
     startDate: searchParams.get("startDate") ?? undefined,

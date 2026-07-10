@@ -84,4 +84,5 @@ export const NAV_ITEMS = [
   { label: "Indian Navy", href: "/indian-navy", icon: "Anchor" },
   { label: "Indian Air Force", href: "/indian-air-force", icon: "Plane" },
   { label: "Indian Coast Guard", href: "/indian-coast-guard", icon: "LifeBuoy" },
+  { label: "Lucknow Constituency", href: "/lucknow-constituency", icon: "MapPin" },
 ] as const;

@@ -14,10 +14,17 @@ import {
 } from "@/components/ui/select";
 import { useFilterStore } from "@/store";
 import type { FilterState } from "@/store/filter-store";
-import { MEDIA_TYPES, MEDIA_LABELS } from "@/constants";
+import { MEDIA_TYPES, MEDIA_LABELS, ENTITY_SLUG_MAP } from "@/constants";
 import type { DefenceEntity } from "@/types";
 import { cn } from "@/lib/utils";
 import { DateRangeInput } from "@/components/common/DateRangeInput";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { MIN_SEARCH_LENGTH, SEARCH_DEBOUNCE_MS } from "@/lib/search";
+
+function entityFromPathname(pathname: string): DefenceEntity | undefined {
+  const slug = pathname.replace(/^\//, "").split("/")[0];
+  return slug ? ENTITY_SLUG_MAP[slug] : undefined;
+}
 
 interface FilterFieldsProps {
   mediaType?: string;
@@ -106,16 +113,14 @@ function FilterFields({
   );
 }
 
-interface FilterBarProps {
-  showEntityFilter?: boolean;
-  entity?: DefenceEntity;
-}
-
-export function FilterBar({ entity }: FilterBarProps) {
+export function FilterBar() {
   const router = useRouter();
   const pathname = usePathname();
+  const entity = entityFromPathname(pathname);
   const searchParams = useSearchParams();
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [searchDraft, setSearchDraft] = useState("");
+  const debouncedSearch = useDebouncedValue(searchDraft, SEARCH_DEBOUNCE_MS);
   const {
     mediaType,
     sentiment,
@@ -134,15 +139,38 @@ export function FilterBar({ entity }: FilterBarProps) {
   }, [searchParams, fromQueryString]);
 
   useEffect(() => {
-    if (entity) {
-      setFilter("entity", entity);
-    }
+    setSearchDraft(search ?? "");
+  }, [search]);
+
+  useEffect(() => {
+    setFilter("entity", entity);
   }, [entity, setFilter]);
 
   const syncUrl = useCallback(() => {
     const qs = toQueryString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [router, pathname, toQueryString]);
+
+  const applySearchFilter = useCallback(
+    (value: string | undefined) => {
+      setFilter("search", value);
+      const params = new URLSearchParams(window.location.search);
+      if (value) params.set("search", value);
+      else params.delete("search");
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [setFilter, router, pathname]
+  );
+
+  useEffect(() => {
+    const trimmed = debouncedSearch.trim();
+    const next =
+      trimmed.length >= MIN_SEARCH_LENGTH ? trimmed : undefined;
+    if (next === (search ?? undefined)) return;
+    if (debouncedSearch !== searchDraft) return;
+    applySearchFilter(next);
+  }, [debouncedSearch, searchDraft, search, applySearchFilter]);
 
   const handleFilterChange = useCallback(
     (key: keyof FilterState, value: string | undefined) => {
@@ -161,6 +189,7 @@ export function FilterBar({ entity }: FilterBarProps) {
   );
 
   const handleReset = () => {
+    setSearchDraft("");
     resetFilters();
     if (entity) setFilter("entity", entity);
     router.replace(pathname, { scroll: false });
@@ -175,15 +204,15 @@ export function FilterBar({ entity }: FilterBarProps) {
       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
       <Input
         placeholder="Global search..."
-        value={search ?? ""}
-        onChange={(e) => handleFilterChange("search", e.target.value || undefined)}
+        value={searchDraft}
+        onChange={(e) => setSearchDraft(e.target.value)}
         className="pl-9"
       />
     </div>
   );
 
   return (
-    <div className="border-b border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-6">
+    <div className="border-b border-slate-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:px-6">
       {/* Mobile: search + toggle */}
       <div className="flex items-center gap-2 lg:hidden">
         {searchInput}

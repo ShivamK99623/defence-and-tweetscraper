@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
-import {
-  getCachedRecords,
-  filterRecords,
-  generateOverviewAnalytics,
-} from "@/services/excel";
+import { queryOverviewAnalytics } from "@/services/excel";
 import type { NewsFilters } from "@/types";
 import { normalizeDateRange } from "@/lib/date-range";
+import { sanitizeSearchQuery } from "@/lib/search";
 
 export async function GET(request: Request) {
   try {
@@ -16,6 +13,10 @@ export async function GET(request: Request) {
       filters.mediaType = searchParams.get("mediaType") as NewsFilters["mediaType"];
     if (searchParams.get("sentiment"))
       filters.sentiment = searchParams.get("sentiment")!;
+    if (searchParams.get("search")) {
+      const sanitized = sanitizeSearchQuery(searchParams.get("search"));
+      if (sanitized) filters.search = sanitized;
+    }
 
     const { startDate, endDate } = normalizeDateRange({
       startDate: searchParams.get("startDate") ?? undefined,
@@ -24,11 +25,9 @@ export async function GET(request: Request) {
     if (startDate) filters.startDate = startDate;
     if (endDate) filters.endDate = endDate;
 
-    const records = getCachedRecords();
-    const filtered = filterRecords(records, filters);
-    const analytics = generateOverviewAnalytics(filtered);
+    const analytics = queryOverviewAnalytics(filters);
 
-    return NextResponse.json({ success: true, data: analytics });
+    return NextResponse.json({ success: true, data: analytics, kpi: analytics });
   } catch (error) {
     console.error("Overview API error:", error);
     return NextResponse.json(

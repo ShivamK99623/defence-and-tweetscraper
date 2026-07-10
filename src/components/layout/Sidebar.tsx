@@ -9,9 +9,11 @@ import {
   Anchor,
   Plane,
   LifeBuoy,
+  MapPin,
   ChevronLeft,
   ChevronRight,
   X,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_ITEMS } from "@/constants";
@@ -24,6 +26,7 @@ const iconMap = {
   Anchor,
   Plane,
   LifeBuoy,
+  MapPin,
 };
 
 interface SidebarProps {
@@ -47,12 +50,9 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
       <div className="flex h-16 items-center border-b border-slate-200 px-4">
         {(!collapsed || mobileOpen) && (
           <div className="min-w-0 flex-1 lg:block">
-            <p className="text-xs font-medium uppercase tracking-wider text-saffron">
+            <p className="text-sm font-medium uppercase tracking-wider text-saffron">
               Ministry of Defence
             </p>
-            <h1 className="truncate text-sm font-bold text-slate-900">
-              Sentiment Intelligence
-            </h1>
           </div>
         )}
         <button
@@ -109,6 +109,17 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: SidebarProps) {
       </nav>
 
       <div className={cn("border-t border-slate-200 p-4", collapsed && "lg:hidden")}>
+        <button
+          type="button"
+          onClick={async () => {
+            await fetch("/api/auth/login", { method: "DELETE" });
+            window.location.href = "/login";
+          }}
+          className="mb-3 flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+        >
+          <LogOut className="h-4 w-4" />
+          Sign out
+        </button>
         <p className="text-xs text-slate-500">Defence Media Intelligence Platform</p>
         <p className="mt-1 text-xs text-slate-400">v1.0.0 · Classified</p>
       </div>

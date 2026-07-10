@@ -9,7 +9,7 @@ import { createHash } from "crypto";
 interface NormalizeParams {
   row: Record<string, unknown>;
   columns: string[];
-  entity: DefenceEntity;
+  entity: DefenceEntity | string;
   mediaType: MediaType;
   sheetName: string;
   fileName: string;

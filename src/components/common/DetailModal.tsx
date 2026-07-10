@@ -103,7 +103,7 @@ export function DetailModal({
                       {value}
                     </span>
                   ) : longTextFields.has(id) ? (
-                    <p className="max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                    <p className="max-h-72 overflow-y-auto whitespace-pre-wrap leading-relaxed">
                       {value}
                     </p>
                   ) : (

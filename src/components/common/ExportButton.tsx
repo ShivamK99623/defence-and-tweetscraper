@@ -21,6 +21,8 @@ export const ExportButton = memo(function ExportButton({
     entitySlug ? countEntitySelections(s.selectedIds, entitySlug) : 0
   );
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const selectionRequired = Boolean(entity);
+  const exportDisabled = selectionRequired && selectionCount === 0;
 
   const appendFilters = (params: URLSearchParams) => {
     const filterKeys = [
@@ -68,16 +70,30 @@ export const ExportButton = memo(function ExportButton({
 
     if (entity) {
       params.set("entity", ENTITY_TO_SLUG[entity]);
+      const newsIds = entitySlug
+        ? useExportSelectionStore.getState().getSelectedIds(entitySlug)
+        : [];
+      for (const id of newsIds) {
+        params.append("newsIds", id);
+      }
     }
 
     appendFilters(params);
     return `/api/export?${params.toString()}`;
   };
 
+  const downloadExport = (format: "csv" | "xlsx") => {
+    if (exportDisabled) return;
+    const link = document.createElement("a");
+    link.href = buildExportUrl(format);
+    link.download = "";
+    link.click();
+  };
+
   const handlePdfExport = async () => {
-    if (entity && selectionCount === 0) {
+    if (exportDisabled) {
       window.alert(
-        "Select news rows from the table (checkboxes) before exporting PDF."
+        "Select news rows from the table (checkboxes) before exporting."
       );
       return;
     }
@@ -127,38 +143,45 @@ export const ExportButton = memo(function ExportButton({
     }
   };
 
+  const selectionTitle =
+    exportDisabled ? "Select news rows from the table first" : undefined;
+
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
       {entity && selectionCount > 0 && (
         <span className="text-xs text-slate-500">
-          {selectionCount} selected for PDF
+          {selectionCount} selected
         </span>
       )}
       <Button
         variant="outline"
         size="sm"
         onClick={handlePdfExport}
-        disabled={isExportingPdf || (Boolean(entity) && selectionCount === 0)}
-        title={
-          entity && selectionCount === 0
-            ? "Select news rows from the table first"
-            : "Export PDF report"
-        }
+        disabled={isExportingPdf || exportDisabled}
+        title={selectionTitle ?? "Export PDF report"}
       >
         <Download className="h-4 w-4" />
         {isExportingPdf ? "PDF…" : "PDF"}
       </Button>
-      <Button variant="outline" size="sm" asChild>
-        <a href={buildExportUrl("csv")} download>
-          <Download className="h-4 w-4" />
-          CSV
-        </a>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => downloadExport("csv")}
+        disabled={exportDisabled}
+        title={selectionTitle ?? "Export selected rows as CSV"}
+      >
+        <Download className="h-4 w-4" />
+        CSV
       </Button>
-      <Button variant="outline" size="sm" asChild>
-        <a href={buildExportUrl("xlsx")} download>
-          <Download className="h-4 w-4" />
-          XLSX
-        </a>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => downloadExport("xlsx")}
+        disabled={exportDisabled}
+        title={selectionTitle ?? "Export selected rows as XLSX"}
+      >
+        <Download className="h-4 w-4" />
+        XLSX
       </Button>
     </div>
   );

@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { Header } from "@/components/layout/Header";
-import { FilterBar } from "@/components/filters/FilterBar";
+import { StickyFilterBar } from "@/components/filters/StickyFilterBar";
 import { EntityDashboard } from "@/components/dashboard/EntityDashboard";
 import { PageSkeleton } from "@/components/common/LoadingSkeleton";
 
@@ -40,9 +40,7 @@ function createEntityPage(config: (typeof ENTITY_PAGES)[number]) {
           title={config.title}
           subtitle={`Sentiment analysis and media monitoring for ${config.entity}`}
         />
-        <Suspense fallback={null}>
-          <FilterBar entity={config.entity} />
-        </Suspense>
+        <StickyFilterBar />
         <div className="p-4 sm:p-6">
           <Suspense fallback={<PageSkeleton />}>
             <EntityDashboard

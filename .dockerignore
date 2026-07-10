@@ -1,0 +1,37 @@
+# Dependencies and build output (installed/built inside the image)
+node_modules
+.next
+out
+build
+
+# Git and IDE
+.git
+.gitignore
+.cursor
+.vscode
+
+# Local env and logs
+.env
+.env.*
+*.log
+npm-debug.log*
+
+# Dev / analysis artifacts
+graphify-out
+src/graphify-out
+coverage
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker files (not needed in build context layers)
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Demo / docs (not required at runtime)
+demo
+*.md
+!README.md

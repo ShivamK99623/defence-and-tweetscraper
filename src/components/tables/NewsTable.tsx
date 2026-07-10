@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, memo } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -33,7 +33,7 @@ import {
   type TableColumnId,
 } from "@/constants/table-columns";
 import { SENTIMENT_COLORS } from "@/constants";
-import { truncate } from "@/lib/utils";
+import { truncate, formatNumber, cn } from "@/lib/utils";
 import {
   getRecordAuthors,
   getRecordCommentCount,
@@ -55,9 +55,9 @@ import {
   getRecordChannelName,
   getRecordBroadcastTime,
 } from "@/lib/record-fields";
-import { formatNumber } from "@/lib/utils";
 import type { MediaType, NewsRecord } from "@/types";
-import { cn } from "@/lib/utils";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { SEARCH_DEBOUNCE_MS } from "@/lib/search";
 import {
   useExportSelectionStore,
   getMediaSelectedIds,
@@ -156,6 +156,10 @@ export const NewsTable = memo(function NewsTable({
 
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
+  const debouncedGlobalFilter = useDebouncedValue(
+    globalFilter,
+    SEARCH_DEBOUNCE_MS
+  );
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() =>
     buildDefaultVisibility(columnConfig)
   );
@@ -346,7 +350,7 @@ export const NewsTable = memo(function NewsTable({
     columns,
     state: {
       sorting,
-      globalFilter,
+      globalFilter: isServerPaginated ? "" : debouncedGlobalFilter,
       columnVisibility,
       ...(isServerPaginated && serverPagination
         ? {
@@ -362,13 +366,16 @@ export const NewsTable = memo(function NewsTable({
     onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
     ...(isServerPaginated
       ? {
           manualPagination: true,
+          manualFiltering: true,
           pageCount,
         }
-      : { getPaginationRowModel: getPaginationRowModel() }),
+      : {
+          getFilteredRowModel: getFilteredRowModel(),
+          getPaginationRowModel: getPaginationRowModel(),
+        }),
     initialState: { pagination: { pageSize: serverPagination?.pageSize ?? 20 } },
   });
 
@@ -417,12 +424,19 @@ export const NewsTable = memo(function NewsTable({
               {selectedSet.size} selected for PDF
             </span>
           )}
-          <Input
-            placeholder="Search table..."
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
-            className="min-w-0 flex-1 bg-white sm:max-w-xs"
-          />
+          {!isServerPaginated && (
+            <Input
+              placeholder="Search table..."
+              value={globalFilter}
+              onChange={(e) => setGlobalFilter(e.target.value)}
+              className="min-w-0 flex-1 bg-white sm:max-w-xs"
+            />
+          )}
+          {isServerPaginated && (
+            <span className="text-xs text-slate-500">
+              Use global search above to filter all records
+            </span>
+          )}
           <div className="flex w-full gap-2 sm:ml-auto sm:w-auto">
             <Button
               variant="outline"

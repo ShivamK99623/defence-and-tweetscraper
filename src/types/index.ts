@@ -11,7 +11,7 @@ export type SentimentType = "positive" | "negative" | "neutral" | "unknown";
 
 export interface NewsRecord {
   id: string;
-  entity: DefenceEntity;
+  entity: DefenceEntity | string;
   mediaType: MediaType;
   heading?: string;
   summary?: string;
@@ -67,7 +67,7 @@ export interface KpiMetrics {
 }
 
 export interface EntityDistribution {
-  entity: DefenceEntity;
+  entity: DefenceEntity | string;
   count: number;
 }
 

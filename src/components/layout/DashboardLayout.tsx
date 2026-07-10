@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useState } from "react";
+import { ReactNode, Suspense, useState } from "react";
 import { Menu } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 
@@ -38,11 +38,8 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             <Menu className="h-5 w-5" />
           </button>
           <div className="min-w-0">
-            <p className="truncate text-xs font-medium uppercase tracking-wider text-saffron">
+            <p className="truncate text-sm font-medium uppercase tracking-wider text-saffron">
               Ministry of Defence
-            </p>
-            <p className="truncate text-sm font-bold text-slate-900">
-              Sentiment Intelligence
             </p>
           </div>
         </div>

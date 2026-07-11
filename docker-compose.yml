@@ -1,16 +1,35 @@
 services:
-  defence-sentiment-dashboard:
+  api:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
+    container_name: defence-sentiment-api
+    ports:
+      - "4000:4000"
+    env_file:
+      - ./backend/.env.local
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Baked into the Next.js client bundle at build time
+        NEXT_PUBLIC_API_URL: https://defence.sahanadashboard.com
     container_name: defence-sentiment-dashboard
     ports:
       - "3000:3000"
+    env_file:
+      - ./frontend/.env.local
     environment:
       NODE_ENV: production
       PORT: 3000
       HOSTNAME: 0.0.0.0
+    depends_on:
+      - api
     restart: unless-stopped
-    # Optional: persist or override the SQLite DB from the host
-    # volumes:
-    #   - ./database/data.db:/app/database/data.db:ro
+

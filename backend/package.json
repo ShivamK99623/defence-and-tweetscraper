@@ -1,0 +1,35 @@
+{
+  "name": "defence-sentiment-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Defence Sentiment Dashboard — Node.js + Express + PostgreSQL API",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc",
+    "start:prod": "node dist/server.js"
+  },
+  "dependencies": {
+    "@react-pdf/renderer": "^4.5.1",
+    "busboy": "^1.6.0",
+    "clsx": "^2.1.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "date-fns": "^4.4.0",
+    "exceljs": "^3.4.0",
+    "express": "^5.2.1",
+    "pg": "^8.22.0",
+    "react": "19.2.4",
+    "tailwind-merge": "^3.6.0",
+    "tsx": "^4.23.0"
+  },
+  "devDependencies": {
+    "@types/busboy": "^1.5.4",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "typescript": "^5"
+  }
+}

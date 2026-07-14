@@ -5,7 +5,7 @@
   "description": "Defence Sentiment Dashboard — Node.js + Express + PostgreSQL API",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
+    "start": "tsx src/server.ts ",
     "build": "tsc",
     "start:prod": "node dist/server.js"
   },

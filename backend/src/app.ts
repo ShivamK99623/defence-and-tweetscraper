@@ -6,6 +6,7 @@ import authRoutes from "./routes/auth.routes";
 import dashboardRoutes from "./routes/dashboard.routes";
 import newsRoutes from "./routes/news.routes";
 import constituencyRoutes from "./routes/constituency.routes";
+import mentionreportRoutes from "./routes/api.mentionreport";
 import { requireAuth } from "./middleware/auth";
 import { errorHandler } from "./middleware/error-handler";
 
@@ -33,7 +34,7 @@ export function createApp() {
   app.use("/api/news", newsRoutes);
   app.use("/api/constituency", constituencyRoutes);
   app.use("/api", apiRoutes);
-
+  app.use("/api/mentionreport", mentionreportRoutes);
   app.use(errorHandler);
 
   return app;

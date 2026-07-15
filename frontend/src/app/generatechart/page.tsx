@@ -586,8 +586,18 @@ function KpiRow({
     neutral: data.sentiment.find((s) => s.name.toLowerCase() === "neutral")?.value ?? 0,
   };
 
+  const hideSocialReach = platform === "online";
+  const showFollowerReach =
+    platform === "youtube" ||
+    platform === "instagram" ||
+    platform === "facebook" ||
+    platform === "overview";
+
   return (
-    <div className="mb-3 grid grid-cols-4 gap-4 border-b pb-4" style={{ borderColor: C.axis }}>
+    <div
+      className={`mb-3 grid gap-4 border-b pb-4 ${hideSocialReach ? "grid-cols-3" : "grid-cols-4"}`}
+      style={{ borderColor: C.axis }}
+    >
       {/* Total Mentions */}
       <div className="flex gap-3">
         <HiOutlineChatBubbleLeftRight
@@ -608,27 +618,41 @@ function KpiRow({
         </div>
       </div>
 
-      {/* Social Reach */}
-      <div className="flex gap-3">
-        <HiOutlineMegaphone className="mt-1 h-8 w-8 shrink-0" style={{ color: C.kpiMega }} />
-        <div>
-          <p className="text-[13px]" style={{ color: C.muted }}>Social Reach</p>
-          <p className="text-[34px] font-semibold leading-none" style={{ color: C.ink }}>
-            {reach > 0 ? formatNumber(reach) : "–"}
-          </p>
-          <p className="text-[11px]" style={{ color: C.muted }}>unique</p>
-          {reach > 0 && platform === "twitter" ? (
-            <p className="mt-1 flex items-center gap-1 text-[11px]" style={{ color: C.muted }}>
-              <FaXTwitter style={{ color: C.cyan }} /> {formatNumber(reach)}
+      {/* Social Reach — hidden for web */}
+      {!hideSocialReach ? (
+        <div className="flex gap-3">
+          <HiOutlineMegaphone className="mt-1 h-8 w-8 shrink-0" style={{ color: C.kpiMega }} />
+          <div>
+            <p className="text-[13px]" style={{ color: C.muted }}>Social Reach</p>
+            <p className="text-[34px] font-semibold leading-none" style={{ color: C.ink }}>
+              {reach > 0 ? formatNumber(reach) : "–"}
             </p>
-          ) : null}
-          {reach > 0 && platform === "youtube" ? (
-            <p className="mt-1 flex items-center gap-1 text-[11px]" style={{ color: C.muted }}>
-              <FaYoutube style={{ color: C.ytRed }} /> {formatNumber(reach)}
+            <p className="text-[11px]" style={{ color: C.muted }}>
+              {showFollowerReach ? "followers" : "unique"}
             </p>
-          ) : null}
+            {reach > 0 && platform === "twitter" ? (
+              <p className="mt-1 flex items-center gap-1 text-[11px]" style={{ color: C.muted }}>
+                <FaXTwitter style={{ color: C.cyan }} /> {formatNumber(reach)}
+              </p>
+            ) : null}
+            {reach > 0 && platform === "youtube" ? (
+              <p className="mt-1 flex items-center gap-1 text-[11px]" style={{ color: C.muted }}>
+                <FaYoutube style={{ color: C.ytRed }} /> {formatNumber(reach)}
+              </p>
+            ) : null}
+            {reach > 0 && platform === "instagram" ? (
+              <p className="mt-1 flex items-center gap-1 text-[11px]" style={{ color: C.muted }}>
+                <FaInstagram style={{ color: "#E1306C" }} /> {formatNumber(reach)}
+              </p>
+            ) : null}
+            {reach > 0 && platform === "facebook" ? (
+              <p className="mt-1 flex items-center gap-1 text-[11px]" style={{ color: C.muted }}>
+                <FaFacebook style={{ color: "#1877F2" }} /> {formatNumber(reach)}
+              </p>
+            ) : null}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {/* Social Engagement */}
       <div className="flex gap-3">
@@ -646,7 +670,7 @@ function KpiRow({
                 <span className="inline-flex items-center gap-1"><FaShareNodes /> {formatNumber(shares)}</span>
               ) : null}
               <span className="inline-flex items-center gap-1"><FaRegComment /> {formatNumber(comments)}</span>
-              {reach > 0 ? (
+              {reach > 0 && platform === "twitter" ? (
                 <span className="inline-flex items-center gap-1"><FaRegEye /> {formatNumber(reach)}</span>
               ) : null}
             </div>
@@ -821,7 +845,10 @@ const COL_TEMPLATE_NO_METRIC = "44px 52px 1fr 96px 118px 96px";
 function rankingMetricLabel(platform: PlatformKey): string | null {
   if (platform === "online") return null;
   if (platform === "twitter") return "Views";
-  return "Likes";
+  if (platform === "youtube" || platform === "instagram" || platform === "facebook") {
+    return "Followers";
+  }
+  return null;
 }
 
 function rankingMetricValue(row: TopEntityRow, platform: PlatformKey): string {
@@ -829,7 +856,7 @@ function rankingMetricValue(row: TopEntityRow, platform: PlatformKey): string {
     return row.views != null ? formatNumber(row.views) : "–";
   }
   if (platform === "youtube" || platform === "instagram" || platform === "facebook") {
-    return row.likes != null ? formatNumber(row.likes) : "–";
+    return row.followers != null ? formatNumber(row.followers) : "–";
   }
   return "–";
 }
@@ -1255,7 +1282,7 @@ interface TrendingTopicItem {
   mix: SentimentMix;
 }
 
-function TrendingTopics({ topics }: { topics: TrendingTopicItem[] }) {
+function TrendingTopics({ topics, startRank = 0 }: { topics: TrendingTopicItem[] , startRank?: number}) {
   const cols = "40px 1fr 96px 96px 118px 104px";
   if (!topics.length) return null;
   return (
@@ -1279,16 +1306,16 @@ function TrendingTopics({ topics }: { topics: TrendingTopicItem[] }) {
             className="grid items-center border-b py-3"
             style={{ gridTemplateColumns: cols, borderColor: C.rowBorder }}
           >
-            <span className="self-start text-[16px]" style={{ color: C.muted }}>{i + 1}</span>
+            <span className="self-start text-[16px]" style={{ color: C.muted }}>{startRank + i + 1}</span>
             <div className="min-w-0 pl-2 pr-4">
               <SoftLink
                 href={t.url}
                 className="line-clamp-3 block text-[13px] leading-snug hover:underline"
-                style={{ color: C.linkBlue }}
+                style={{ color: t.url ? C.linkBlue : C.muted }}
               >
                 {t.cluster}
               </SoftLink>
-              {t.url ? (
+              {t.url && t.url !== "" ? (
                 <a
                   href={t.url.replace(/\s+/g, "")}
                   target="_blank"
@@ -1464,7 +1491,9 @@ function OverviewSlide({ platforms }: { platforms: PlatformChartPayload[] }) {
         totalMentions: sum((p) => p.kpis.totalMentions),
         uniqueSources: sum((p) => p.kpis.socialUsers + p.kpis.webSites),
         totalEngagement: sum((p) => p.kpis.totalEngagement),
-        totalReach: sum((p) => p.kpis.totalReach),
+        totalReach: platforms
+          .filter((p) => p.platform === "youtube" || p.platform === "instagram" || p.platform === "facebook")
+          .reduce((s, p) => s + (p.kpis.totalReach ?? 0), 0),
         socialMentions: sum((p) => p.kpis.socialMentions),
         socialUsers: sum((p) => p.kpis.socialUsers),
         webMentions: sum((p) => p.kpis.webMentions),
@@ -1797,6 +1826,108 @@ const EXECUTIVE_SUMMARY = (totalMentions: number) => {
     ],
   };
 };
+
+
+function formatCompactCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "–";
+  if (value >= 1_000_000) {
+    const n = value / 1_000_000;
+    return `${n >= 10 ? n.toFixed(0) : n.toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (value >= 1_000) {
+    const n = value / 1_000;
+    return `${n >= 10 ? n.toFixed(0) : n.toFixed(1).replace(/\.0$/, "")}K`;
+  }
+  return String(Math.round(value));
+}
+
+
+// dummy trending topics
+let trendingTopicsdfd:any[] = [
+  {
+    cluster:
+      "FACT-CHECK: MoD says Op Sindoor martyrs were honoured with gallantry awards back in August 2025 — DGMO receipts shut down 'hidden casualties' claim",
+    mentions: 47,
+    reach: 224000,
+    engagement: 18000,
+    mix: {
+      positive: 66,
+      negative: 12,
+      neutral: 22,
+    },
+  },
+  {
+    cluster:
+      "Privilege Motion Against Rajnath Singh: K.C. Venugopal tells Parliament RM's casualty denial was 'a straightforward, clear-cut lie'",
+    mentions: 41,
+    reach: 187000,
+    engagement: 15000,
+    mix: {
+      positive: 19,
+      negative: 58,
+      neutral: 23,
+    },
+  },
+  {
+    cluster:
+      "Clip Was Cut? Full transcript shows Rajnath Singh's July 2025 reply denied only pilot losses, not all Op Sindoor casualties, say defence sources",
+    mentions: 33,
+    reach: 142000,
+    engagement: 11000,
+    mix: {
+      positive: 57,
+      negative: 21,
+      neutral: 22,
+    },
+  },
+  {
+    cluster:
+      'AI-faked video claiming Army Chief "admitted failure" in Operation Sindoor goes viral. Fact-checkers trace it to Pakistan-linked accounts',
+    mentions: 26,
+    reach: 103000,
+    engagement: 8100,
+    mix: {
+      positive: 41,
+      negative: 30,
+      neutral: 29,
+    },
+  },
+  {
+    cluster:
+      "Shiv Sena's Priyanka Chaturvedi breaks ranks with opposition, reminds Parliament that DGMO publicly honoured the six martyrs a year ago",
+    mentions: 18,
+    reach: 71000,
+    engagement: 5200,
+    mix: {
+      positive: 64,
+      negative: 9,
+      neutral: 27,
+    },
+  },
+  {
+    cluster:
+      "Shiv Sena's Priyanka Chaturvedi breaks ranks with opposition, reminds Parliament that DGMO publicly honoured the six martyrs a year ago",
+    mentions: 18,
+    reach: 71000,
+    engagement: 5200,
+    mix: {
+      positive: 64,
+      negative: 9,
+      neutral: 27,
+    },
+  },
+].map((item) => ({
+  cluster: item.cluster,
+  url:"",
+  mentions: String(item.mentions),
+  reach: formatCompactCount(item.reach),
+  engagement: formatCompactCount(item.engagement),
+  mix: {
+    positive: item.mix.positive,
+    negative: item.mix.negative,
+    neutral: item.mix.neutral,
+  },
+})) 
 
 export default function GenerateChartPage() {
   const [draftFilters, setDraftFilters] = useState<ChartFilters>(DEFAULT_FILTERS);
@@ -2217,6 +2348,7 @@ export default function GenerateChartPage() {
             <OverviewSlide platforms={platformData} />
             <ExecutiveSummary summary={EXECUTIVE_SUMMARY(platformData.reduce((acc, curr) => acc + curr.kpis.totalMentions, 0))} />
             <TrendingTopics topics={trendingTopics} />
+            <TrendingTopics topics={trendingTopicsdfd} startRank={5} />
             {pages}
           </div>
         ) : null}

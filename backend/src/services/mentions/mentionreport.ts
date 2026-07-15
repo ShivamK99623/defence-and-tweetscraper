@@ -647,6 +647,100 @@ const PLATFORM_META: Record<
   },
 };
 
+/** Manual follower counts keyed by normalized handle / channel / page name. */
+const INSTAGRAM_FOLLOWERS: Record<string, string> = {
+  cjp_madhya_pradeshmp13: "11.4K",
+  bharatdecoded27: "2133",
+  sanjaydekaflj: "10.3K",
+  thelikeindia: "46K",
+  newssense_daily: "5804",
+  swaybharat: "6915",
+  "spot.newsmedia": "112K",
+  "political_.mirror": "1628",
+  realtalksbymomen_: "1059",
+  thesachtalk: "24.4K",
+  indiansgag: "925K",
+  "the.vital.feed": "4227",
+  "navikrag.mudde": "938",
+  hlworld_official: "4665",
+  acp_fact: "9969",
+  factexpress1268: "2423",
+  thebharatpost_: "1M",
+  qequickexplained: "1565",
+  firstpost: "3M",
+  bslensinsta: "1125",
+  rajusinghfacts: "578",
+  indians_duniya: "38.9K",
+  edgenewsin: "196K",
+  drsti_kone: "14.7K",
+};
+
+const YOUTUBE_FOLLOWERS: Record<string, string> = {
+  "ankit inspire india": "5.92M",
+  "abhisar sharma": "10M",
+  "politics broadcast": "416K",
+  "ravish kumar official": "14.7M",
+  "online news india": "7.84M",
+  "indian express hindi": "471K",
+  "kumkum binwal": "1.57M",
+  "bbc news hindi": "21.8M",
+  "the public india": "16M",
+  "satya hindi": "3.71M",
+  "news pinch": "1.61M",
+  "news 24": "27.2M",
+  "article19 india": "4.58M",
+  "hw news english": "1.84M",
+  "4pm": "8.59M",
+  "live hindustan": "13.4M",
+  "indian youth congress": "3.06M",
+  "public meter": "3.33M",
+  "paurush sharma": "1.69M",
+  "the rajneeti": "3.2M",
+  "bolta hindustan": "925K",
+  "aam aadmi party": "7.54M",
+  "lokmat hindi": "3.79M",
+  deshkaal: "72K",
+};
+
+const FACEBOOK_FOLLOWERS: Record<string, string> = {
+  "vipin saroha": "256K",
+  "all india radio news": "4.9M",
+  opindia: "428K",
+  "zee news english": "17M",
+  "dna india": "2.5M",
+  "the hindu": "5.4M",
+  "first post": "4M",
+  "the economic times": "4.8M",
+  mythbuster: "1.8K",
+  "indian air force police": "1.3K",
+  scoopwhoop: "4.5M",
+  deshneeti: "509K",
+  "online news": "4.4M",
+  "aj news pulse": "37K",
+  "unlock the mind": "4.1M",
+  "local news of india": "841K",
+  "jaano junction": "4.4K",
+  "zee odisha": "519K",
+  "indian express": "7.7M",
+  news18: "7.2M",
+  "report card": "8.3K",
+  "aayushi dubey": "11K",
+  "viral news reaction": "4.8K",
+  "republic bharat": "10M",
+};
+
+function lookupFollowers(
+  map: Record<string, string>,
+  key: string
+): number | null {
+  const normalized = key.replace(/^@/, "").trim().toLowerCase();
+  if (!normalized) return null;
+  const raw = map[normalized];
+  if (raw == null) return null;
+  const value = parseEngagementNumber(raw);
+  return value > 0 ? value : null;
+}
+
 const SENTIMENT_COLORS: Record<SentimentBucket, string> = {
   positive: "#22c55e",
   negative: "#ef4444",
@@ -918,6 +1012,17 @@ function buildTopEntities(
       subLabel: item.subLabel,
       link: item.link ?? "",
     }));
+}
+
+/** Sum unique-entity follower counts (nulls ignored). Used as Social Reach for IG/YT/FB. */
+function sumEntityFollowers(map: Map<string, EntityAccumulator>): number {
+  let total = 0;
+  for (const entity of map.values()) {
+    if (entity.followers != null && entity.followers > 0) {
+      total += entity.followers;
+    }
+  }
+  return total;
 }
 
 function twoDigit(value: number): string {
@@ -1294,6 +1399,7 @@ function loadYouTubeData(filters: ChartFilters = {}): PlatformChartPayload {
       {
         link: videoUrl,
         likes: rowLikes,
+        followers: lookupFollowers(YOUTUBE_FOLLOWERS, channel),
       }
     );
 
@@ -1321,7 +1427,7 @@ function loadYouTubeData(filters: ChartFilters = {}): PlatformChartPayload {
       totalMentions: rows.length,
       uniqueSources: channels.size,
       totalEngagement: likes + comments,
-      totalReach: 0,
+      totalReach: sumEntityFollowers(channels),
       socialMentions: rows.length,
       socialUsers: channels.size,
       webMentions: 0,
@@ -1393,6 +1499,7 @@ function loadInstagramData(filters: ChartFilters = {}): PlatformChartPayload {
     trackEntity(handles, handleKey, handle, `@${handle.replace(/^@/, "")}`, engagement, bucket, {
       link: profileUrl || postUrl,
       likes,
+      followers: lookupFollowers(INSTAGRAM_FOLLOWERS, handleKey),
     });
 
     posts.push({
@@ -1420,7 +1527,7 @@ function loadInstagramData(filters: ChartFilters = {}): PlatformChartPayload {
       totalMentions: rows.length,
       uniqueSources: handles.size,
       totalEngagement,
-      totalReach: 0,
+      totalReach: sumEntityFollowers(handles),
       socialMentions: rows.length,
       socialUsers: handles.size,
       webMentions: 0,
@@ -1521,6 +1628,7 @@ async function loadFacebookData(filters: ChartFilters = {}): Promise<PlatformCha
     trackEntity(handles, handle.toLowerCase(), handle, handle, likes, bucket, {
       link: postUrl,
       likes,
+      followers: lookupFollowers(FACEBOOK_FOLLOWERS, handle),
     });
 
     posts.push({
@@ -1548,7 +1656,7 @@ async function loadFacebookData(filters: ChartFilters = {}): Promise<PlatformCha
       totalMentions: filtered.length,
       uniqueSources: handles.size,
       totalEngagement,
-      totalReach: 0,
+      totalReach: sumEntityFollowers(handles),
       socialMentions: filtered.length,
       socialUsers: handles.size,
       webMentions: 0,

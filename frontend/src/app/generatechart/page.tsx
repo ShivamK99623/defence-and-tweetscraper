@@ -71,6 +71,8 @@ interface TopEntityRow {
   mentions: number;
   engagement: number;
   followers: number | null;
+  views?: number | null;
+  likes?: number | null;
   sentiment: SentimentBucket;
   sentimentMix: SentimentMix;
   subLabel?: string;
@@ -89,6 +91,17 @@ interface PostItem {
   views: number;
   url: string;
   image?: string;
+}
+
+interface ActorGroupPosts {
+  id: string;
+  title: string;
+  posts: PostItem[];
+}
+
+interface ExecutiveSummaryPayload {
+  paragraph: string;
+  bullets: { lead: string; body: string }[];
 }
 
 interface ArticleItem {
@@ -137,6 +150,7 @@ interface PlatformChartPayload {
   posts?: PostItem[];
   articles?: ArticleItem[];
   videos?: VideoItem[];
+  actorGroups?: ActorGroupPosts[];
   accentColor: string;
 }
 
@@ -182,8 +196,31 @@ const DEFAULT_REPORT_TITLE = "Analytical Report on Operation Sindoor Controversy
 const SLIDE_W = 1152;
 const SLIDE_H = 648;
 
+type KeywordMode = "and" | "or";
+type SearchFieldKey = "content" | "title" | "author" | "summary" | "url" | "tags";
+
+const ALL_SEARCH_FIELDS: SearchFieldKey[] = [
+  "content",
+  "title",
+  "author",
+  "summary",
+  "url",
+  "tags",
+];
+
+const SEARCH_FIELD_LABELS: Record<SearchFieldKey, string> = {
+  content: "Content",
+  title: "Title / Headline",
+  author: "Author / Handle",
+  summary: "Summary",
+  url: "URL / Link",
+  tags: "Tags",
+};
+
 interface ChartFilters {
   keyword: string;
+  keywordMode: KeywordMode;
+  searchFields: SearchFieldKey[];
   startDate: string;
   endDate: string;
   reportTitle: string;
@@ -192,7 +229,12 @@ interface ChartFilters {
 interface ChartMeta {
   reportTitle: string;
   keyword: string;
+  keywordMode?: KeywordMode;
+  searchFields?: SearchFieldKey[];
   dateRange: { start: string; end: string };
+  queryType?: "none" | "boolean" | "keyword_and" | "keyword_or";
+  queryTypeLabel?: string;
+  generatedQuery?: string;
 }
 
 const ReportMetaContext = createContext<{
@@ -216,9 +258,49 @@ function formatDateRangeLabel(start: string, end: string): string {
   return `${fmt(start)} - ${fmt(end)}`;
 }
 
+function describeQueryLocal(filters: ChartFilters): Pick<
+  ChartMeta,
+  "queryType" | "queryTypeLabel" | "generatedQuery"
+> {
+  const raw = filters.keyword.trim();
+  if (!raw) {
+    return {
+      queryType: "none",
+      queryTypeLabel: "No keyword filter",
+      generatedQuery: "(all mentions in date range)",
+    };
+  }
+  if (/[()]|\b(and|or)\b|&&|\|\|/i.test(raw)) {
+    return {
+      queryType: "boolean",
+      queryTypeLabel: "Boolean expression (AND / OR / groups)",
+      generatedQuery: raw,
+    };
+  }
+  const terms = raw
+    .split(/[,;]/)
+    .map((t) => t.trim().replace(/^["']|["']$/g, ""))
+    .filter(Boolean);
+  const joiner = filters.keywordMode === "or" ? " OR " : " AND ";
+  return {
+    queryType: filters.keywordMode === "or" ? "keyword_or" : "keyword_and",
+    queryTypeLabel:
+      filters.keywordMode === "or"
+        ? "Keyword list (OR — any term matches)"
+        : "Keyword list (AND — all terms must match)",
+    generatedQuery: terms.map((t) => (t.includes(" ") ? `"${t}"` : t)).join(joiner) || raw,
+  };
+}
+
 function buildAllUrl(base: string, filters: ChartFilters): string {
   const params = new URLSearchParams();
   if (filters.keyword.trim()) params.set("keyword", filters.keyword.trim());
+  if (filters.keywordMode) params.set("keywordMode", filters.keywordMode);
+  if (filters.searchFields.length && filters.searchFields.length < ALL_SEARCH_FIELDS.length) {
+    params.set("searchFields", filters.searchFields.join(","));
+  } else if (filters.searchFields.length === ALL_SEARCH_FIELDS.length) {
+    params.set("searchFields", filters.searchFields.join(","));
+  }
   if (filters.startDate) params.set("startDate", filters.startDate);
   if (filters.endDate) params.set("endDate", filters.endDate);
   if (filters.reportTitle.trim()) params.set("reportTitle", filters.reportTitle.trim());
@@ -734,17 +816,36 @@ function donutOption(items: { name: string; value: number }[]): EChartsOption {
 /* ------------------------------------------------------------------ */
 
 const COL_TEMPLATE = "44px 52px 1fr 110px 96px 118px 96px";
+const COL_TEMPLATE_NO_METRIC = "44px 52px 1fr 96px 118px 96px";
 
-function RankingHeaderRow() {
+function rankingMetricLabel(platform: PlatformKey): string | null {
+  if (platform === "online") return null;
+  if (platform === "twitter") return "Views";
+  return "Likes";
+}
+
+function rankingMetricValue(row: TopEntityRow, platform: PlatformKey): string {
+  if (platform === "twitter") {
+    return row.views != null ? formatNumber(row.views) : "–";
+  }
+  if (platform === "youtube" || platform === "instagram" || platform === "facebook") {
+    return row.likes != null ? formatNumber(row.likes) : "–";
+  }
+  return "–";
+}
+
+function RankingHeaderRow({ platform }: { platform: PlatformKey }) {
+  const metric = rankingMetricLabel(platform);
+  const cols = metric ? COL_TEMPLATE : COL_TEMPLATE_NO_METRIC;
   return (
     <div
       className="grid items-end pb-2 text-[15px]"
-      style={{ gridTemplateColumns: COL_TEMPLATE, color: C.muted }}
+      style={{ gridTemplateColumns: cols, color: C.muted }}
     >
       <span />
       <span />
       <span />
-      <span className="text-right">Followers</span>
+      {metric ? <span className="text-right">{metric}</span> : null}
       <span className="border-l text-right" style={{ borderColor: C.axis }}>Mentions</span>
       <span className="border-l text-right" style={{ borderColor: C.axis }}>Engagement</span>
       <span className="border-l text-right" style={{ borderColor: C.axis }}>Sentiment</span>
@@ -769,6 +870,8 @@ function RankingRow({
   row: TopEntityRow;
   platform: PlatformKey;
 }) {
+  const metric = rankingMetricLabel(platform);
+  const cols = metric ? COL_TEMPLATE : COL_TEMPLATE_NO_METRIC;
   const nameNode = row.link ? (
     <a
       href={row.link}
@@ -788,7 +891,7 @@ function RankingRow({
   return (
     <div
       className="grid items-center border-b py-2"
-      style={{ gridTemplateColumns: COL_TEMPLATE, borderColor: C.rowBorder }}
+      style={{ gridTemplateColumns: cols, borderColor: C.rowBorder }}
     >
       <span className="text-[26px] font-light" style={{ color: "#C7CBD1" }}>{rank}</span>
       <div
@@ -845,9 +948,11 @@ function RankingRow({
           <SentimentMixBar mix={row.sentimentMix} height={4} />
         </div>
       </div>
-      <p className="text-right text-[16px]" style={{ color: "#444" }}>
-        {row.followers != null ? formatNumber(row.followers) : "–"}
-      </p>
+      {metric ? (
+        <p className="text-right text-[16px]" style={{ color: "#444" }}>
+          {rankingMetricValue(row, platform)}
+        </p>
+      ) : null}
       <p className="text-right text-[24px] font-light" style={{ color: "#444" }}>{row.mentions}</p>
       <p className="text-right text-[24px] font-light" style={{ color: "#444" }}>
         {platform === "online" ? "-" : row.engagement > 0 ? formatNumber(row.engagement) : "–"}
@@ -892,7 +997,7 @@ function RankingPage({
           <IoRefresh className="h-5 w-5" style={{ color: "#B8BEC6" }} />
         </div>
       )}
-      <RankingHeaderRow />
+      <RankingHeaderRow platform={platform} />
       <div className="flex-1">
         {chunkRows.map((row, i) => (
           <RankingRow key={`${row.handle}-${i}`} rank={startRank + i} row={row} platform={platform} />
@@ -1118,46 +1223,21 @@ function CardGrid({ children }: { children: ReactNode }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Static narrative pages (Executive Summary + Trending Topics)        */
+/* Narrative pages (Executive Summary + Trending Topics)               */
 /* ------------------------------------------------------------------ */
 
-const EXEC_PARAGRAPH =
-  'This collection of social and web posts primarily discusses the National War Memorial in New Delhi, highlighting its significance as a tribute to fallen soldiers. Accompanying this is news about the Indian Army Chief\u2019s remarks on potential future operations ("Operation Sindoor 2.0," "Operation Snow Leopard 2.0") and a fact-check debunking AI-manipulated videos falsely attributing criticism to the Army Chief regarding an "Operation Sindoor failure." The overall sentiment leans positive, with a significant number of positive posts praising the memorial and its purpose.';
-
-const EXEC_BULLETS: { lead: string; body: string }[] = [
-  {
-    lead: "Focus on National War Memorial:",
-    body: " The National War Memorial is consistently portrayed as a significant and revered monument honoring Indian soldiers.",
-  },
-  {
-    lead: "Army Chief\u2019s Strategic Outlook:",
-    body: ' The Indian Army Chief\u2019s forward-looking statements about preparedness for "Operation Sindoor 2.0" and "Operation Snow Leopard 2.0" are noted.',
-  },
-  {
-    lead: 'Debunked "Operation Sindoor Failure" Narrative:',
-    body: ' AI-manipulated videos falsely linking the Army Chief to criticism of an "Operation Sindoor failure" are explicitly identified as misinformation.',
-  },
-  {
-    lead: "Positive Sentiment Dominates Memorial Coverage:",
-    body: " Discussions and vlogs about the National War Memorial are overwhelmingly positive.",
-  },
-  {
-    lead: "Multitude of Sources:",
-    body: " Information is disseminated across web articles, X posts, YouTube videos, and reposts, indicating broad reach.",
-  },
-];
-
-function ExecutiveSummary() {
+function ExecutiveSummary({ summary }: { summary: ExecutiveSummaryPayload | null }) {
+  if (!summary) return null;
   return (
     <Slide page={3} title="Executive Summary">
       <HeaderBand variant="crimson" title="Executive Summary" subtitle="Summary of the clustered topics" />
       <p className="max-w-[1030px] text-[16px] leading-relaxed" style={{ color: C.ink }}>
-        {EXEC_PARAGRAPH}
+        {summary.paragraph}
       </p>
       <ul className="mt-5 space-y-2.5 pl-6">
-        {EXEC_BULLETS.map((b) => (
+        {summary.bullets.map((b) => (
           <li key={b.lead} className="list-disc text-[15px] leading-snug" style={{ color: C.ink }}>
-            <span className="font-bold">{b.lead}</span>
+            <span className="font-bold">{b.lead} :-</span>
             {b.body}
           </li>
         ))}
@@ -1166,57 +1246,18 @@ function ExecutiveSummary() {
   );
 }
 
-const TRENDING: {
+interface TrendingTopicItem {
   cluster: string;
+  url: string;
   mentions: string;
   reach: string;
   engagement: string;
   mix: SentimentMix;
-}[] = [
-  {
-    cluster:
-      'Indian Army Chief General Upendra Dwivedi has directed officers to prepare for "Operation Sindoor 2.0" and "Operation Snow Leopard 2.0." This emphasizes a strong focus on mission readiness, modern warfare integration, and continuous vigilance for national security.',
-    mentions: "171",
-    reach: "206M",
-    engagement: "1.6M",
-    mix: { positive: 80, negative: 20, neutral: 0 },
-  },
-  {
-    cluster:
-      "Explore India\u2019s National War Memorial in New Delhi, a tribute to fallen soldiers. The video highlights its four circles: Immortality, Bravery, Sacrifice, and Protection, symbolizing valor and the eternal flame. Visit this iconic monument for free near India Gate.",
-    mentions: "19",
-    reach: "28K",
-    engagement: "10K",
-    mix: { positive: 100, negative: 0, neutral: 0 },
-  },
-  {
-    cluster:
-      "Delhi CM inaugurates Inderlok-Indraprastha Metro line. This project will significantly benefit commuters, including government employees, students, traders, and tourists, improving daily travel in the city.",
-    mentions: "11",
-    reach: "-",
-    engagement: "-",
-    mix: { positive: 88, negative: 0, neutral: 12 },
-  },
-  {
-    cluster:
-      "Outgoing Indian Army Chief Gen Upendra Dwivedi paid respects at the National War Memorial during his farewell ceremony in Delhi. ANI shared the video of the event on YouTube.",
-    mentions: "9",
-    reach: "33M",
-    engagement: "48K",
-    mix: { positive: 100, negative: 0, neutral: 0 },
-  },
-  {
-    cluster:
-      "A fact-check reveals videos criticizing the Army Chief for Operation Sindoor are AI-manipulated. The Chief of Army Staff did not criticize the Centre over a supposed \u2018failure.\u2019",
-    mentions: "8",
-    reach: "45K",
-    engagement: "4",
-    mix: { positive: 8, negative: 88, neutral: 4 },
-  },
-];
+}
 
-function TrendingTopics() {
+function TrendingTopics({ topics }: { topics: TrendingTopicItem[] }) {
   const cols = "40px 1fr 96px 96px 118px 104px";
+  if (!topics.length) return null;
   return (
     <Slide page={4} title="Top Trending Topics">
       <HeaderBand variant="crimson" title="Top Trending Topics" subtitle="Top Clusters, Ordered by total mentions" />
@@ -1232,14 +1273,34 @@ function TrendingTopics() {
         <span className="border-l text-center" style={{ borderColor: C.axis }}>Sentiment</span>
       </div>
       <div className="flex-1">
-        {TRENDING.map((t, i) => (
+        {topics.map((t, i) => (
           <div
-            key={i}
+            key={`${t.url}-${i}`}
             className="grid items-center border-b py-3"
             style={{ gridTemplateColumns: cols, borderColor: C.rowBorder }}
           >
             <span className="self-start text-[16px]" style={{ color: C.muted }}>{i + 1}</span>
-            <p className="pl-2 pr-4 text-[13px] leading-snug" style={{ color: "#3A3A3A" }}>{t.cluster}</p>
+            <div className="min-w-0 pl-2 pr-4">
+              <SoftLink
+                href={t.url}
+                className="line-clamp-3 block text-[13px] leading-snug hover:underline"
+                style={{ color: C.linkBlue }}
+              >
+                {t.cluster}
+              </SoftLink>
+              {t.url ? (
+                <a
+                  href={t.url.replace(/\s+/g, "")}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-0.5 inline-flex items-center gap-1 text-[11px] hover:underline"
+                  style={{ color: C.muted }}
+                >
+                  <FaArrowUpRightFromSquare className="h-2.5 w-2.5" />
+                  Open post
+                </a>
+              ) : null}
+            </div>
             <span className="text-right text-[16px]" style={{ color: C.ink }}>{t.mentions}</span>
             <span className="text-right text-[16px]" style={{ color: C.ink }}>{t.reach}</span>
             <span className="text-right text-[16px]" style={{ color: C.ink }}>{t.engagement}</span>
@@ -1529,7 +1590,7 @@ const POST_LABEL: Partial<Record<PlatformKey, { title: string; subtitle: string 
 };
 
 const POST_DESC =
-  "These are the Top web pages that mention the selected keywords, ordered by the ranking of the website that contains the page (smaller rank is better).";
+  "These are the Top web pages that mention the selected keywords, ordered by the ranking of the website that contains the page.";
 
 const DIVIDER_TITLE: Record<PlatformKey, string> = {
   twitter: "Analytical Report on X",
@@ -1540,6 +1601,46 @@ const DIVIDER_TITLE: Record<PlatformKey, string> = {
 };
 
 function CardListSlides({
+  data,
+  counter,
+  title,
+  subtitle,
+  description,
+  items,
+  slideKey,
+}: {
+  data: PlatformChartPayload;
+  counter: () => number;
+  title: string;
+  subtitle: string;
+  description: string;
+  items: ReactNode[];
+  slideKey: string;
+}): ReactNode[] {
+  if (!items.length) return [];
+
+  return chunk(items, 6).map((group, gi) => {
+    const page = counter();
+    return (
+      <Slide key={`${slideKey}-${gi}`} page={page} title={title}>
+        {gi === 0 ? (
+          <HeaderBand
+            variant="gold"
+            icon={data.platform === "online" ? "doc" : data.platform}
+            title={title}
+            subtitle={subtitle}
+            description={description}
+          />
+        ) : (
+          <div style={{ height: 12 }} />
+        )}
+        <CardGrid>{group}</CardGrid>
+      </Slide>
+    );
+  });
+}
+
+function PlatformPostSlides({
   data,
   counter,
 }: {
@@ -1560,27 +1661,44 @@ function CardListSlides({
           ? (data.videos ?? []).map((v, i) => <VideoCard key={i} video={v} />)
           : [];
 
-  if (!items.length) return [];
-
-  return chunk(items, 6).map((group, gi) => {
-    const page = counter();
-    return (
-      <Slide key={`cards-${data.platform}-${gi}`} page={page} title={label.title}>
-        {gi === 0 ? (
-          <HeaderBand
-            variant="gold"
-            icon={data.platform === "online" ? "doc" : data.platform}
-            title={label.title}
-            subtitle={label.subtitle}
-            description={POST_DESC}
-          />
-        ) : (
-          <div style={{ height: 12 }} />
-        )}
-        <CardGrid>{group}</CardGrid>
-      </Slide>
-    );
+  return CardListSlides({
+    data,
+    counter,
+    title: label.title,
+    subtitle: label.subtitle,
+    description: POST_DESC,
+    items,
+    slideKey: `cards-${data.platform}`,
   });
+}
+
+function ActorGroupSlides({
+  data,
+  counter,
+}: {
+  data: PlatformChartPayload;
+  counter: () => number;
+}): ReactNode[] {
+  if (data.platform !== "twitter" || !data.actorGroups?.length) return [];
+
+  const nodes: ReactNode[] = [];
+  for (const group of data.actorGroups) {
+    const items = group.posts.map((p, i) => (
+      <PostCard key={`${group.id}-${i}`} post={p} />
+    ));
+    nodes.push(
+      ...CardListSlides({
+        data,
+        counter,
+        title: group.title,
+        subtitle: "Ordered by Engagement",
+        description: POST_DESC,
+        items,
+        slideKey: `actor-${group.id}`,
+      })
+    );
+  }
+  return nodes;
 }
 
 function PlatformSection({
@@ -1628,13 +1746,18 @@ function PlatformSection({
   });
 
   // Post/article/video cards
-  nodes.push(...CardListSlides({ data, counter }));
+  nodes.push(...PlatformPostSlides({ data, counter }));
+
+  // Curated actor groups (Twitter/X) — same post-card design, after Top X Posts
+  nodes.push(...ActorGroupSlides({ data, counter }));
 
   return nodes;
 }
 
 const DEFAULT_FILTERS: ChartFilters = {
   keyword: "",
+  keywordMode: "and",
+  searchFields: [...ALL_SEARCH_FIELDS],
   startDate: DEFAULT_START_DATE,
   endDate: DEFAULT_END_DATE,
   reportTitle: DEFAULT_REPORT_TITLE,
@@ -1643,11 +1766,45 @@ const DEFAULT_FILTERS: ChartFilters = {
 const filterFieldClass =
   "h-8 rounded border border-[#D1D5DB] bg-white px-2 text-[13px] text-[#111] outline-none focus:border-[#1A4D8C]";
 
+
+// statics executive summary
+const EXECUTIVE_SUMMARY = (totalMentions: number) => {
+  return {
+    paragraph:
+    "Between June 25 and July 12, 2026, social media and web conversations around the Operation Sindoor controversy were analyzed across X, Web, YouTube, Instagram, and Facebook to understand discussion volume, reach, sentiment, and key activity trends.",
+
+  bullets: [
+    {
+      lead: "Conversation Volume",
+      body:
+        `A total of ${totalMentions} mentions were tracked across all monitored platforms, with X alone reaching 20.9M users and generating a combined engagement of approximately 16.09 lakh.`
+    },
+    {
+      lead: "Sentiment Overview",
+      body:
+        "Overall sentiment remained predominantly neutral (62.3%), followed by positive (21.5%) and negative (16.3%). While X and YouTube were largely neutral and factual, Instagram (54% negative) and Facebook (66.7% negative) showed more critical discussions. Web coverage was comparatively positive (50.2%)."
+    },
+    {
+      lead: "Peak Discussion Period",
+      body:
+        "Conversation volume was concentrated between June 26 and June 28, peaking at nearly 650 mentions on June 27 following the government's first official disclosure of the names of six Operation Sindoor martyrs."
+    },
+    {
+      lead: "Recurring Activity",
+      body:
+        "After the initial surge, discussion gradually declined, with smaller spikes observed between July 5 and July 9, driven primarily by Defence Ministry statements regarding force readiness."
+    }
+    ],
+  };
+};
+
 export default function GenerateChartPage() {
   const [draftFilters, setDraftFilters] = useState<ChartFilters>(DEFAULT_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<ChartFilters>(DEFAULT_FILTERS);
   const [meta, setMeta] = useState<ChartMeta | null>(null);
   const [platformData, setPlatformData] = useState<PlatformChartPayload[]>([]);
+  const [executiveSummary, setExecutiveSummary] = useState<ExecutiveSummaryPayload | null>(null);
+  const [trendingTopics, setTrendingTopics] = useState<TrendingTopicItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -1674,18 +1831,36 @@ export default function GenerateChartPage() {
         success: boolean;
         data: PlatformChartPayload[];
         meta?: ChartMeta;
+        executiveSummary?: ExecutiveSummaryPayload;
+        trendingTopics?: TrendingTopicItem[];
       };
       if (!json.success) throw new Error("Chart API returned an error");
       const ordered = PLATFORM_ORDER
         .map((k) => json.data.find((d) => d.platform === k))
         .filter(Boolean) as PlatformChartPayload[];
       setPlatformData(ordered);
-      if (json.meta) setMeta(json.meta);
-      else {
+      setExecutiveSummary(json.executiveSummary ?? null);
+      setTrendingTopics(json.trendingTopics ?? []);
+      if (json.meta) {
+        const local = describeQueryLocal(filters);
+        setMeta({
+          ...json.meta,
+          keywordMode: json.meta.keywordMode ?? filters.keywordMode,
+          searchFields: json.meta.searchFields?.length
+            ? json.meta.searchFields
+            : filters.searchFields,
+          queryType: json.meta.queryType ?? local.queryType,
+          queryTypeLabel: json.meta.queryTypeLabel ?? local.queryTypeLabel,
+          generatedQuery: json.meta.generatedQuery ?? local.generatedQuery,
+        });
+      } else {
         setMeta({
           reportTitle: filters.reportTitle.trim() || DEFAULT_REPORT_TITLE,
           keyword: filters.keyword.trim(),
+          keywordMode: filters.keywordMode,
+          searchFields: filters.searchFields,
           dateRange: { start: filters.startDate, end: filters.endDate },
+          ...describeQueryLocal(filters),
         });
       }
     } catch (err) {
@@ -1707,13 +1882,29 @@ export default function GenerateChartPage() {
   }, [appliedFilters, loadData]);
 
   const applyFilters = () => {
+    const fields =
+      draftFilters.searchFields.length > 0
+        ? draftFilters.searchFields
+        : [...ALL_SEARCH_FIELDS];
     const next = {
       ...draftFilters,
       keyword: draftFilters.keyword.trim(),
+      keywordMode: draftFilters.keywordMode,
+      searchFields: fields,
       reportTitle: draftFilters.reportTitle.trim() || DEFAULT_REPORT_TITLE,
     };
     setDraftFilters(next);
     setAppliedFilters(next);
+  };
+
+  const toggleSearchField = (field: SearchFieldKey) => {
+    setDraftFilters((f) => {
+      const has = f.searchFields.includes(field);
+      const nextFields = has
+        ? f.searchFields.filter((x) => x !== field)
+        : [...f.searchFields, field];
+      return { ...f, searchFields: nextFields };
+    });
   };
 
   const resetFilters = () => {
@@ -1802,7 +1993,7 @@ export default function GenerateChartPage() {
             </div>
 
             <div className="grid grid-cols-1 gap-2 md:grid-cols-12 md:items-end">
-              <label className="flex flex-col gap-1 md:col-span-4">
+              <label className="flex flex-col gap-1 md:col-span-3">
                 <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: C.muted }}>
                   Report title
                 </span>
@@ -1815,9 +2006,9 @@ export default function GenerateChartPage() {
                   placeholder={DEFAULT_REPORT_TITLE}
                 />
               </label>
-              <label className="flex flex-col gap-1 md:col-span-3">
+              <label className="flex flex-col gap-1 md:col-span-4">
                 <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: C.muted }}>
-                  Keyword
+                  Keywords
                 </span>
                 <input
                   className={filterFieldClass}
@@ -1825,15 +2016,39 @@ export default function GenerateChartPage() {
                   onChange={(e) =>
                     setDraftFilters((f) => ({ ...f, keyword: e.target.value }))
                   }
-                  placeholder="Filter by keyword…"
+                  placeholder='sindoor and (controversy or deaths)'
                   onKeyDown={(e) => {
                     if (e.key === "Enter") applyFilters();
                   }}
                 />
               </label>
-              <label className="flex flex-col gap-1 md:col-span-2">
+              <div className="flex flex-col gap-1 md:col-span-2">
                 <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: C.muted }}>
-                  Start date
+                  Match
+                </span>
+                <div className="flex h-8 overflow-hidden rounded border" style={{ borderColor: "#D1D5DB" }}>
+                  {(["and", "or"] as KeywordMode[]).map((mode) => {
+                    const active = draftFilters.keywordMode === mode;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setDraftFilters((f) => ({ ...f, keywordMode: mode }))}
+                        className="flex-1 text-[12px] font-semibold uppercase tracking-wide"
+                        style={{
+                          backgroundColor: active ? C.samvad : "#fff",
+                          color: active ? "#fff" : "#444",
+                        }}
+                      >
+                        {mode}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <label className="flex flex-col gap-1 md:col-span-1">
+                <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: C.muted }}>
+                  Start
                 </span>
                 <input
                   type="date"
@@ -1844,9 +2059,9 @@ export default function GenerateChartPage() {
                   }
                 />
               </label>
-              <label className="flex flex-col gap-1 md:col-span-2">
+              <label className="flex flex-col gap-1 md:col-span-1">
                 <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: C.muted }}>
-                  End date
+                  End
                 </span>
                 <input
                   type="date"
@@ -1863,10 +2078,110 @@ export default function GenerateChartPage() {
                 </Button>
               </div>
             </div>
-            {meta?.keyword ? (
-              <p className="text-[12px]" style={{ color: C.muted }}>
-                Active keyword: “{meta.keyword}” · {reportMeta.dateRangeLabel}
+
+            <div className="flex flex-col gap-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: C.muted }}>
+                  Search fields (all media)
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="text-[11px] font-medium hover:underline"
+                    style={{ color: C.samvad }}
+                    onClick={() =>
+                      setDraftFilters((f) => ({ ...f, searchFields: [...ALL_SEARCH_FIELDS] }))
+                    }
+                  >
+                    All
+                  </button>
+                  <span style={{ color: C.muted }}>·</span>
+                  <button
+                    type="button"
+                    className="text-[11px] font-medium hover:underline"
+                    style={{ color: C.samvad }}
+                    onClick={() => setDraftFilters((f) => ({ ...f, searchFields: [] }))}
+                  >
+                    None
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {ALL_SEARCH_FIELDS.map((field) => {
+                  const on = draftFilters.searchFields.includes(field);
+                  return (
+                    <button
+                      key={field}
+                      type="button"
+                      onClick={() => toggleSearchField(field)}
+                      className="rounded border px-2.5 py-1 text-[12px] font-medium transition-colors"
+                      style={{
+                        borderColor: on ? C.samvad : "#D1D5DB",
+                        backgroundColor: on ? "rgba(26,77,140,0.08)" : "#fff",
+                        color: on ? C.samvad : "#555",
+                      }}
+                    >
+                      {SEARCH_FIELD_LABELS[field]}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px]" style={{ color: C.muted }}>
+                Boolean:{" "}
+                <code className="rounded bg-[#F3F4F6] px-1">
+                  sindoor and (controversy or deaths)
+                </code>
+                . Also{" "}
+                <code className="rounded bg-[#F3F4F6] px-1">and</code>/
+                <code className="rounded bg-[#F3F4F6] px-1">or</code>, parentheses, quotes for phrases.
+                Plain comma lists still use the AND/OR toggle. Fields apply to every media.
               </p>
+            </div>
+
+            {/* Query note — toolbar only (no-print); not part of report slides */}
+            {meta ? (
+              <div
+                className="rounded-md border px-3 py-2 text-[12px] leading-snug no-print"
+                style={{
+                  borderColor: "#D6E3F0",
+                  backgroundColor: "#F4F8FC",
+                  color: "#334155",
+                }}
+              >
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span
+                    className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white"
+                    style={{ backgroundColor: C.samvad }}
+                  >
+                    Note
+                  </span>
+                  <span className="font-semibold" style={{ color: C.samvad }}>
+                    Query type:
+                  </span>
+                  <span>{meta.queryTypeLabel ?? "—"}</span>
+                  {meta.queryType ? (
+                    <span className="font-mono text-[11px]" style={{ color: C.muted }}>
+                      ({meta.queryType})
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-1">
+                  <span className="font-semibold" style={{ color: C.samvad }}>
+                    Generated query:
+                  </span>{" "}
+                  <code className="rounded bg-white px-1.5 py-0.5 font-mono text-[12px]" style={{ color: C.ink }}>
+                    {meta.generatedQuery || meta.keyword || "(all mentions in date range)"}
+                  </code>
+                </div>
+                <div className="mt-1" style={{ color: C.muted }}>
+                  Fields:{" "}
+                  {(meta.searchFields ?? appliedFilters.searchFields)
+                    .map((f) => SEARCH_FIELD_LABELS[f] ?? f)
+                    .join(", ")}
+                  {" · "}
+                  {reportMeta.dateRangeLabel}
+                </div>
+              </div>
             ) : null}
           </div>
         </div>
@@ -1900,8 +2215,8 @@ export default function GenerateChartPage() {
           >
             <CoverPage />
             <OverviewSlide platforms={platformData} />
-            <ExecutiveSummary />
-            <TrendingTopics />
+            <ExecutiveSummary summary={EXECUTIVE_SUMMARY(platformData.reduce((acc, curr) => acc + curr.kpis.totalMentions, 0))} />
+            <TrendingTopics topics={trendingTopics} />
             {pages}
           </div>
         ) : null}

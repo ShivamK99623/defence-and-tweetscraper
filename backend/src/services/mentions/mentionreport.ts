@@ -7,17 +7,51 @@ const REPORT_START = new Date("2026-06-25T00:00:00");
 const REPORT_END = new Date("2026-07-12T23:59:59");
 const DEFAULT_REPORT_TITLE = "Analytical Report on Operation Sindoor Controversy";
 
+export type KeywordMode = "and" | "or";
+
+/** Cross-media logical fields — mapped per platform column. */
+export type SearchFieldKey =
+  | "content"
+  | "title"
+  | "author"
+  | "summary"
+  | "url"
+  | "tags";
+
+export const ALL_SEARCH_FIELDS: SearchFieldKey[] = [
+  "content",
+  "title",
+  "author",
+  "summary",
+  "url",
+  "tags",
+];
+
 export interface ChartFilters {
+  /** Comma-separated keywords (also used for single keyword). */
   keyword?: string;
+  keywordMode?: KeywordMode;
+  /** Fields to search; empty / omitted = all available fields. */
+  searchFields?: SearchFieldKey[];
   startDate?: string; // YYYY-MM-DD
   endDate?: string; // YYYY-MM-DD
   reportTitle?: string;
 }
 
+export type QueryType = "none" | "boolean" | "keyword_and" | "keyword_or";
+
 export interface ChartMeta {
   reportTitle: string;
   keyword: string;
+  keywordMode: KeywordMode;
+  searchFields: SearchFieldKey[];
   dateRange: { start: string; end: string };
+  /** How the keyword filter was interpreted for this request. */
+  queryType: QueryType;
+  /** Human-readable query type label. */
+  queryTypeLabel: string;
+  /** Normalized query expression actually applied. */
+  generatedQuery: string;
 }
 
 function parseIsoDayStart(value: string | undefined | null): Date | null {
@@ -43,14 +77,246 @@ function resolveFilterRange(filters: ChartFilters = {}): { start: Date; end: Dat
   return { start, end };
 }
 
-function normalizeKeyword(raw: string | undefined | null): string {
-  return (raw ?? "").trim().toLowerCase();
+function resolveKeywordMode(raw: string | undefined | null): KeywordMode {
+  return String(raw ?? "").trim().toLowerCase() === "or" ? "or" : "and";
 }
 
-function matchesKeyword(keyword: string, ...parts: Array<string | undefined | null>): boolean {
-  if (!keyword) return true;
-  const hay = parts.filter(Boolean).join(" ").toLowerCase();
-  return hay.includes(keyword);
+function parseSearchFields(raw: string | string[] | undefined | null): SearchFieldKey[] {
+  const pieces = Array.isArray(raw)
+    ? raw
+    : String(raw ?? "")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+  const allowed = new Set<string>(ALL_SEARCH_FIELDS);
+  const fields = pieces.filter((p): p is SearchFieldKey => allowed.has(p));
+  return fields.length ? fields : [...ALL_SEARCH_FIELDS];
+}
+
+/** Split keywords: commas/semicolons, or quoted phrases; otherwise whitespace. */
+export function parseKeywords(raw: string | undefined | null): string[] {
+  const text = (raw ?? "").trim();
+  if (!text) return [];
+  const out: string[] = [];
+  const re = /"([^"]+)"|'([^']+)'|([^,;]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const token = (m[1] ?? m[2] ?? m[3] ?? "").trim().toLowerCase();
+    if (token) out.push(token);
+  }
+  return out;
+}
+
+type BoolNode =
+  | { type: "term"; value: string }
+  | { type: "and"; left: BoolNode; right: BoolNode }
+  | { type: "or"; left: BoolNode; right: BoolNode };
+
+type BoolToken =
+  | { kind: "term"; value: string }
+  | { kind: "and" }
+  | { kind: "or" }
+  | { kind: "lparen" }
+  | { kind: "rparen" };
+
+function looksLikeBooleanQuery(raw: string): boolean {
+  return /[()]|\b(and|or)\b|&&|\|\|/.test(raw);
+}
+
+function tokenizeBooleanQuery(raw: string): BoolToken[] {
+  const s = raw.trim();
+  const tokens: BoolToken[] = [];
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (/\s/.test(ch) || ch === ",") {
+      i += 1;
+      continue;
+    }
+    if (ch === "(") {
+      tokens.push({ kind: "lparen" });
+      i += 1;
+      continue;
+    }
+    if (ch === ")") {
+      tokens.push({ kind: "rparen" });
+      i += 1;
+      continue;
+    }
+    if (s.startsWith("&&", i)) {
+      tokens.push({ kind: "and" });
+      i += 2;
+      continue;
+    }
+    if (s.startsWith("||", i)) {
+      tokens.push({ kind: "or" });
+      i += 2;
+      continue;
+    }
+    if (ch === "&") {
+      tokens.push({ kind: "and" });
+      i += 1;
+      continue;
+    }
+    if (ch === "|") {
+      tokens.push({ kind: "or" });
+      i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      i += 1;
+      let value = "";
+      while (i < s.length && s[i] !== quote) {
+        value += s[i];
+        i += 1;
+      }
+      if (i < s.length) i += 1; // closing quote
+      const term = value.trim().toLowerCase();
+      if (term) tokens.push({ kind: "term", value: term });
+      continue;
+    }
+
+    let j = i;
+    while (j < s.length && !/\s/.test(s[j]) && s[j] !== "(" && s[j] !== ")" && s[j] !== "," && s[j] !== "&" && s[j] !== "|") {
+      j += 1;
+    }
+    const word = s.slice(i, j);
+    i = j;
+    const lower = word.toLowerCase();
+    if (lower === "and") tokens.push({ kind: "and" });
+    else if (lower === "or") tokens.push({ kind: "or" });
+    else if (word.trim()) tokens.push({ kind: "term", value: lower });
+  }
+  return tokens;
+}
+
+function parseBooleanQuery(raw: string): BoolNode | null {
+  const tokens = tokenizeBooleanQuery(raw);
+  if (!tokens.length) return null;
+  let pos = 0;
+
+  const peek = () => tokens[pos];
+  const consume = () => tokens[pos++];
+
+  const parsePrimary = (): BoolNode | null => {
+    const t = peek();
+    if (!t) return null;
+    if (t.kind === "lparen") {
+      consume();
+      const inner = parseOr();
+      if (peek()?.kind === "rparen") consume();
+      return inner;
+    }
+    if (t.kind === "term") {
+      consume();
+      return { type: "term", value: t.value };
+    }
+    return null;
+  };
+
+  const parseAnd = (): BoolNode | null => {
+    let left = parsePrimary();
+    if (!left) return null;
+    while (true) {
+      const t = peek();
+      if (!t) break;
+      if (t.kind === "and") {
+        consume();
+        const right = parsePrimary();
+        if (!right) break;
+        left = { type: "and", left, right };
+        continue;
+      }
+      // juxtaposition → AND  e.g. sindoor (controversy or deaths)
+      if (t.kind === "term" || t.kind === "lparen") {
+        const right = parsePrimary();
+        if (!right) break;
+        left = { type: "and", left, right };
+        continue;
+      }
+      break;
+    }
+    return left;
+  };
+
+  const parseOr = (): BoolNode | null => {
+    let left = parseAnd();
+    if (!left) return null;
+    while (peek()?.kind === "or") {
+      consume();
+      const right = parseAnd();
+      if (!right) break;
+      left = { type: "or", left, right };
+    }
+    return left;
+  };
+
+  try {
+    const tree = parseOr();
+    return tree;
+  } catch {
+    return null;
+  }
+}
+
+function evalBooleanNode(node: BoolNode, hay: string): boolean {
+  switch (node.type) {
+    case "term":
+      return hay.includes(node.value);
+    case "and":
+      return evalBooleanNode(node.left, hay) && evalBooleanNode(node.right, hay);
+    case "or":
+      return evalBooleanNode(node.left, hay) || evalBooleanNode(node.right, hay);
+  }
+}
+
+type SearchFieldValues = Partial<Record<SearchFieldKey, string | undefined | null>>;
+
+function buildSearchHaystack(
+  filters: ChartFilters,
+  fields: SearchFieldValues
+): string | null {
+  const selected = parseSearchFields(filters.searchFields);
+  const parts = selected
+    .map((key) => fields[key])
+    .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    .map((v) => v.toLowerCase());
+
+  const haystackParts =
+    parts.length > 0
+      ? parts
+      : Object.values(fields)
+          .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+          .map((v) => v.toLowerCase());
+
+  if (!haystackParts.length) return null;
+  return haystackParts.join(" \n ");
+}
+
+function matchesAdvancedSearch(
+  filters: ChartFilters,
+  fields: SearchFieldValues
+): boolean {
+  const raw = (filters.keyword ?? "").trim();
+  if (!raw) return true;
+
+  const hay = buildSearchHaystack(filters, fields);
+  if (hay == null) return false;
+
+  // Boolean query: sindoor and (controversy or deaths)
+  if (looksLikeBooleanQuery(raw)) {
+    const tree = parseBooleanQuery(raw);
+    if (tree) return evalBooleanNode(tree, hay);
+  }
+
+  // Legacy: comma-separated keywords + AND/OR mode toggle
+  const keywords = parseKeywords(raw);
+  if (!keywords.length) return true;
+  const mode = resolveKeywordMode(filters.keywordMode);
+  return mode === "or"
+    ? keywords.some((k) => hay.includes(k))
+    : keywords.every((k) => hay.includes(k));
 }
 
 function resolveReportTitle(filters: ChartFilters = {}): string {
@@ -58,12 +324,68 @@ function resolveReportTitle(filters: ChartFilters = {}): string {
   return title || DEFAULT_REPORT_TITLE;
 }
 
+function describeGeneratedQuery(filters: ChartFilters = {}): {
+  queryType: QueryType;
+  queryTypeLabel: string;
+  generatedQuery: string;
+} {
+  const raw = (filters.keyword ?? "").trim();
+  if (!raw) {
+    return {
+      queryType: "none",
+      queryTypeLabel: "No keyword filter",
+      generatedQuery: "(all mentions in date range)",
+    };
+  }
+
+  if (looksLikeBooleanQuery(raw)) {
+    const tree = parseBooleanQuery(raw);
+    if (tree) {
+      return {
+        queryType: "boolean",
+        queryTypeLabel: "Boolean expression (AND / OR / groups)",
+        generatedQuery: raw,
+      };
+    }
+  }
+
+  const keywords = parseKeywords(raw);
+  const mode = resolveKeywordMode(filters.keywordMode);
+  if (!keywords.length) {
+    return {
+      queryType: "none",
+      queryTypeLabel: "No keyword filter",
+      generatedQuery: "(all mentions in date range)",
+    };
+  }
+
+  const joiner = mode === "or" ? " OR " : " AND ";
+  const generatedQuery = keywords
+    .map((k) => (k.includes(" ") ? `"${k}"` : k))
+    .join(joiner);
+
+  return {
+    queryType: mode === "or" ? "keyword_or" : "keyword_and",
+    queryTypeLabel:
+      mode === "or"
+        ? "Keyword list (OR — any term matches)"
+        : "Keyword list (AND — all terms must match)",
+    generatedQuery,
+  };
+}
+
 export function buildChartMeta(filters: ChartFilters = {}): ChartMeta {
   const { start, end } = resolveFilterRange(filters);
+  const q = describeGeneratedQuery(filters);
   return {
     reportTitle: resolveReportTitle(filters),
     keyword: (filters.keyword ?? "").trim(),
+    keywordMode: resolveKeywordMode(filters.keywordMode),
+    searchFields: parseSearchFields(filters.searchFields),
     dateRange: { start: toIsoDate(start), end: toIsoDate(end) },
+    queryType: q.queryType,
+    queryTypeLabel: q.queryTypeLabel,
+    generatedQuery: q.generatedQuery,
   };
 }
 
@@ -73,8 +395,11 @@ export function parseChartFiltersFromQuery(query: any): ChartFilters {
     if (Array.isArray(v)) return String(v[0] ?? "");
     return typeof v === "string" ? v : "";
   };
+  const fieldsRaw = pick("searchFields") || pick("fields");
   return {
     keyword: pick("keyword") || undefined,
+    keywordMode: resolveKeywordMode(pick("keywordMode") || pick("mode")),
+    searchFields: parseSearchFields(fieldsRaw),
     startDate: pick("startDate") || undefined,
     endDate: pick("endDate") || undefined,
     reportTitle: pick("reportTitle") || undefined,
@@ -101,6 +426,10 @@ export interface TopEntityRow {
   mentions: number;
   engagement: number;
   followers: number | null;
+  /** Sum of post views in range (Twitter/X). */
+  views: number | null;
+  /** Sum of likes in range (YouTube / Instagram / Facebook). */
+  likes: number | null;
   sentiment: SentimentBucket;
   sentimentMix: { positive: number; negative: number; neutral: number };
   rankLabel?: string;
@@ -120,6 +449,12 @@ export interface PostItem {
   views: number;
   url: string;
   image?: string;
+}
+
+export interface ActorGroupPosts {
+  id: string;
+  title: string;
+  posts: PostItem[];
 }
 
 export interface ArticleItem {
@@ -168,6 +503,8 @@ export interface PlatformChartPayload {
   posts?: PostItem[];
   articles?: ArticleItem[];
   videos?: VideoItem[];
+  /** Curated handle groups → top posts (Twitter/X only). */
+  actorGroups?: ActorGroupPosts[];
   chartTypes: {
     timeline: "line";
     sentiment: "pie";
@@ -175,6 +512,108 @@ export interface PlatformChartPayload {
     ranking: "bar";
   };
   accentColor: string;
+}
+
+const TWITTER_ACTOR_GROUPS: { id: string; title: string; handles: string[] }[] = [
+  {
+    id: "opposition",
+    title: "The opposition & political machine",
+    handles: [
+      "Pawankhera",
+      "INCIndia",
+      "kcvenugopalmp",
+      "SupriyaShrinate",
+      "GauravGogoiAsm",
+      "ManishTewari",
+      "INCKerala",
+      "sagarikaghose",
+      "priyankac19",
+    ],
+  },
+  {
+    id: "celebrity",
+    title: "Celebrity & influencer critics",
+    handles: [
+      "zoo_bear",
+      "malpani",
+      "MANJULtoons",
+      "iamnarendranath",
+      "ShayarImran",
+      "Highonchoorma",
+      "SushantSin",
+      "manaman_chhina",
+    ],
+  },
+  {
+    id: "defence",
+    title: "The defence: official machinery, allies and fact-checkers",
+    handles: [
+      "SpokespersonMoD",
+      "PIB_India",
+      "HQ_IDS_India",
+      "amitmalviya",
+      "ShivAroor",
+      "MeghUpdates",
+      "AshokShrivasta6",
+      "pradip103",
+      "Mrsinha",
+      "yashwantcall4",
+      "MythbusterXX",
+      "BefittingFacts",
+      "rkalia80",
+      "priyankac19",
+    ],
+  },
+  {
+    id: "media",
+    title: "Media conduct: who seeded the false frame",
+    handles: [
+      "IndiaToday",
+      "ANI",
+      "PTI_News",
+      "news24tvchannel",
+      "the_hindu",
+      "trtworld",
+      "ndtv",
+      "IndianExpress",
+      "CNNnews18",
+      "WIONews",
+      "htTweets",
+      "ETNOWlive",
+      "guwahatiplus",
+    ],
+  },
+];
+
+function normalizeHandleKey(handle: string): string {
+  return handle.replace(/^@/, "").trim().toLowerCase();
+}
+
+function buildActorGroupPosts(
+  posts: (PostItem & { engagement: number })[],
+  limit = 24
+): ActorGroupPosts[] {
+  return TWITTER_ACTOR_GROUPS.map((group) => {
+    const allowed = new Set(group.handles.map(normalizeHandleKey));
+    const bestByHandle = new Map<string, PostItem & { engagement: number }>();
+    for (const post of posts) {
+      const key = normalizeHandleKey(post.handle);
+      if (!allowed.has(key)) continue;
+      const existing = bestByHandle.get(key);
+      if (
+        !existing ||
+        post.engagement > existing.engagement ||
+        (post.engagement === existing.engagement && post.views > existing.views)
+      ) {
+        bestByHandle.set(key, post);
+      }
+    }
+    const groupPosts = [...bestByHandle.values()]
+      .sort((a, b) => b.engagement - a.engagement || b.views - a.views)
+      .slice(0, limit)
+      .map(({ engagement: _engagement, ...post }) => post);
+    return { id: group.id, title: group.title, posts: groupPosts };
+  }).filter((g) => g.posts.length > 0);
 }
 
 const PLATFORM_META: Record<
@@ -434,6 +873,8 @@ interface EntityAccumulator {
   mentions: number;
   engagement: number;
   followers: number | null;
+  views: number;
+  likes: number;
   subLabel?: string;
   link?: string;
   sentiment: Record<SentimentBucket, number>;
@@ -466,6 +907,8 @@ function buildTopEntities(
       mentions: item.mentions,
       engagement: item.engagement,
       followers: item.followers ?? null,
+      views: item.views,
+      likes: item.likes,
       sentiment: dominantSentiment(item.sentiment),
       sentimentMix: {
         positive: item.sentiment.positive,
@@ -552,7 +995,13 @@ function trackEntity(
   handle: string,
   engagement: number,
   sentiment: SentimentBucket,
-  extra?: { followers?: number | null; subLabel?: string, link?: string }
+  extra?: {
+    followers?: number | null;
+    subLabel?: string;
+    link?: string;
+    views?: number;
+    likes?: number;
+  }
 ) {
   const existing = map.get(key) ?? {
     name: displayName,
@@ -560,6 +1009,8 @@ function trackEntity(
     mentions: 0,
     engagement: 0,
     followers: extra?.followers ?? null,
+    views: 0,
+    likes: 0,
     subLabel: extra?.subLabel,
     sentiment: { positive: 0, negative: 0, neutral: 0 },
     link: extra?.link ?? "",
@@ -567,6 +1018,8 @@ function trackEntity(
   existing.mentions += 1;
   existing.engagement += engagement;
   if (extra?.followers != null) existing.followers = extra.followers;
+  if (extra?.views != null) existing.views += extra.views;
+  if (extra?.likes != null) existing.likes += extra.likes;
   if (extra?.subLabel && !existing.subLabel) existing.subLabel = extra.subLabel;
   if (extra?.link && !existing.link) existing.link = extra.link;
   existing.sentiment[sentiment] += 1;
@@ -604,12 +1057,15 @@ function twitterPostImage(item: TwitterRecord): string {
 
 function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
   const { start, end } = resolveFilterRange(filters);
-  const keyword = normalizeKeyword(filters.keyword);
   const raw = JSON.parse(fs.readFileSync(DATA_FILES.twitter, "utf8")) as TwitterRecord[];
   const filtered = raw.filter((item) => {
     const date = new Date(item.datetime);
     if (!inDateRange(date, start, end)) return false;
-    return matchesKeyword(keyword, item.content, item.username);
+    return matchesAdvancedSearch(filters, {
+      content: item.content,
+      author: item.username,
+      url: item.statusHref ? `https://x.com${item.statusHref}` : "",
+    });
   });
 
   const sentiment: Record<SentimentBucket, number> = {
@@ -644,11 +1100,12 @@ function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
     comments += itemComments;
     views += itemViews;
 
-    const engagement = itemLikes + itemShares * 2 + itemComments;
+    const engagement = itemLikes + itemShares + itemComments;
     const handle = item.username.replace(/^@/, "");
     const postUrl = item.statusHref ? `https://x.com${item.statusHref}` : "";
     trackEntity(handles, handle, handle, `@${handle}`, engagement, bucket, {
       link: `https://x.com/${handle}`,
+      views: itemViews,
     });
 
     posts.push({
@@ -695,6 +1152,7 @@ function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
       .sort((a, b) => b.engagement - a.engagement)
       .slice(0, 24)
       .map(({ engagement: _engagement, ...post }) => post),
+    actorGroups: buildActorGroupPosts(posts),
     chartTypes: {
       timeline: "line",
       sentiment: "pie",
@@ -707,17 +1165,16 @@ function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
 
 function loadOnlineData(filters: ChartFilters = {}): PlatformChartPayload {
   const { start, end } = resolveFilterRange(filters);
-  const keyword = normalizeKeyword(filters.keyword);
   const rows = readCsv(DATA_FILES.online).filter((row) => {
     const date = parseDmyDate(row["Date & Time"]);
     if (!inDateRange(date, start, end)) return false;
-    return matchesKeyword(
-      keyword,
-      row.Heading,
-      row.Summary,
-      row.Content,
-      row.Publication
-    );
+    return matchesAdvancedSearch(filters, {
+      title: row.Heading,
+      summary: row.Summary,
+      content: row.Content,
+      author: [row.Publication, row.Authors].filter(Boolean).join(" "),
+      url: row.Links,
+    });
   });
 
   const sentiment: Record<SentimentBucket, number> = {
@@ -791,11 +1248,16 @@ function loadOnlineData(filters: ChartFilters = {}): PlatformChartPayload {
 
 function loadYouTubeData(filters: ChartFilters = {}): PlatformChartPayload {
   const { start, end } = resolveFilterRange(filters);
-  const keyword = normalizeKeyword(filters.keyword);
   const rows = readCsv(DATA_FILES.youtube).filter((row) => {
     const date = parseDmyDate(row["Date & Time"]);
     if (!inDateRange(date, start, end)) return false;
-    return matchesKeyword(keyword, row.Headline, row.Channel, row.Summary);
+    return matchesAdvancedSearch(filters, {
+      title: row.Headline,
+      author: row.Channel,
+      summary: row.Summary,
+      content: row.Summary,
+      url: row.Link,
+    });
   });
 
   const sentiment: Record<SentimentBucket, number> = {
@@ -831,6 +1293,7 @@ function loadYouTubeData(filters: ChartFilters = {}): PlatformChartPayload {
       bucket,
       {
         link: videoUrl,
+        likes: rowLikes,
       }
     );
 
@@ -887,19 +1350,16 @@ function loadYouTubeData(filters: ChartFilters = {}): PlatformChartPayload {
 
 function loadInstagramData(filters: ChartFilters = {}): PlatformChartPayload {
   const { start, end } = resolveFilterRange(filters);
-  const keyword = normalizeKeyword(filters.keyword);
   const rows = readCsv(DATA_FILES.instagram).filter((row) => {
     const date = parseDotDate(row.CreatedAt);
     if (!inDateRange(date, start, end)) return false;
-    return matchesKeyword(
-      keyword,
-      row.Handle,
-      row.Headline,
-      row.Caption,
-      row.Content,
-      row.Text,
-      row.URL
-    );
+    return matchesAdvancedSearch(filters, {
+      author: row.Handle,
+      title: row.Headline,
+      content: [row.Caption, row.Content, row.Text].filter(Boolean).join(" "),
+      summary: row.Caption,
+      url: row.URL,
+    });
   });
 
   const sentiment: Record<SentimentBucket, number> = {
@@ -932,6 +1392,7 @@ function loadInstagramData(filters: ChartFilters = {}): PlatformChartPayload {
 
     trackEntity(handles, handleKey, handle, `@${handle.replace(/^@/, "")}`, engagement, bucket, {
       link: profileUrl || postUrl,
+      likes,
     });
 
     posts.push({
@@ -1024,11 +1485,16 @@ async function loadFacebookData(filters: ChartFilters = {}): Promise<PlatformCha
   };
 
   const { start, end } = resolveFilterRange(filters);
-  const keyword = normalizeKeyword(filters.keyword);
   const filtered = rows.filter((row) => {
     const date = parseFacebookDate(row.createdAt);
     if (!inDateRange(date, start, end)) return false;
-    return matchesKeyword(keyword, row.headline, row.handle, row.tags);
+    return matchesAdvancedSearch(filters, {
+      title: row.headline,
+      content: row.headline,
+      author: row.handle,
+      tags: row.tags,
+      url: row.url,
+    });
   });
 
   const sentiment: Record<SentimentBucket, number> = {
@@ -1054,6 +1520,7 @@ async function loadFacebookData(filters: ChartFilters = {}): Promise<PlatformCha
     const postUrl = sanitizeHttpUrl(row.url);
     trackEntity(handles, handle.toLowerCase(), handle, handle, likes, bucket, {
       link: postUrl,
+      likes,
     });
 
     posts.push({
@@ -1124,6 +1591,390 @@ export async function getAllPlatformChartData(
 ): Promise<PlatformChartPayload[]> {
   const platforms = Object.keys(loaders) as PlatformKey[];
   return Promise.all(platforms.map((platform) => getPlatformChartData(platform, filters)));
+}
+
+/* ------------------------------------------------------------------ */
+/* Executive summary (data-driven from news + social on martyrs row)   */
+/* ------------------------------------------------------------------ */
+
+export interface ExecutiveSummaryPayload {
+  paragraph: string;
+  bullets: { lead: string; body: string }[];
+}
+
+const EXEC_THEMES: {
+  id: string;
+  lead: string;
+  body: string;
+  pattern: RegExp;
+}[] = [
+  {
+    id: "casualty_row",
+    lead: "Operation Sindoor casualty / martyrs row:",
+    body: " Coverage repeatedly contested how many Indian soldiers were martyred, including claims that confirmed martyr figures were inflated in hostile narratives.",
+    pattern:
+      /\b(martyr|shaheed|casualt|coffin|600|six soldiers?|6 soldiers?|soldier[s]? (killed|martyred)|honou?r.*martyr)\b/i,
+  },
+  {
+    id: "political_attack",
+    lead: "Political attack on casualty statements:",
+    body: " Opposition parties and commentators pressed privilege motions and resignation demands against the Defence Minister over alleged misstatements on Operation Sindoor losses.",
+    pattern:
+      /\b(privilege motion|rajnath|defence minister|resign|congress|opposition|lie|mislead|monsoon session|all-?party)\b/i,
+  },
+  {
+    id: "war_memorial",
+    lead: "Tributes at the National War Memorial:",
+    body: " A parallel stream honoured fallen soldiers at the National War Memorial, framing remembrance of martyrs as distinct from the partisan casualty controversy.",
+    pattern:
+      /\b(national war memorial|war memorial|tribute|fallen soldiers?|immortality|bravery|sacrifice|eternal flame)\b/i,
+  },
+  {
+    id: "fact_check",
+    lead: "Fact-checks of manipulated videos:",
+    body: " Fact-checkers flagged AI-manipulated / deepfake clips that falsely attributed admissions of Operation Sindoor failure or losses to senior military leadership.",
+    pattern:
+      /\b(fact[- ]?check|AI[- ]?manipulat|deepfake|digitally altered|fake video|manipulated video|false(ly)? claim)\b/i,
+  },
+  {
+    id: "ops_readiness",
+    lead: "Forward messaging on readiness:",
+    body: " Official and supportive coverage also highlighted preparedness themes such as Operation Sindoor 2.0 / follow-on contingencies and the primacy of trained soldiers over AI alone.",
+    pattern:
+      /\b(sindoor\s*2\.0|snow leopard|army chief|dwivedi|trained soldiers?|national resolve|prepare(dness)?)\b/i,
+  },
+  {
+    id: "terror_camps",
+    lead: "Counter-narrative on operational impact:",
+    body: " Pro-operation voices stressed strikes on terror camps and rejected casualty-inflation claims as propaganda meant to dilute the martyrs’ sacrifice.",
+    pattern:
+      /\b(terror camp|terrorist (base|camp)|hit terror|destroyed|fake news|propaganda|cope)\b/i,
+  },
+];
+
+function formatShortDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function collectExecutiveCorpus(filters: ChartFilters): string[] {
+  return collectMentionDocs(filters).map((d) => d.text);
+}
+
+interface MentionDoc {
+  text: string;
+  url: string;
+  engagement: number;
+  views: number;
+  sentiment: SentimentBucket;
+}
+
+function collectMentionDocs(filters: ChartFilters): MentionDoc[] {
+  const { start, end } = resolveFilterRange(filters);
+  const docs: MentionDoc[] = [];
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(DATA_FILES.twitter, "utf8")) as TwitterRecord[];
+    for (const item of raw) {
+      const date = new Date(item.datetime);
+      if (!inDateRange(date, start, end)) continue;
+      if (
+        !matchesAdvancedSearch(filters, {
+          content: item.content,
+          author: item.username,
+          url: item.statusHref ? `https://x.com${item.statusHref}` : "",
+        })
+      ) {
+        continue;
+      }
+      const stats = item.stats ?? {};
+      const likes = stats.likes ?? 0;
+      const shares = stats.reposts ?? 0;
+      const comments = stats.replies ?? 0;
+      const views = stats.views ?? 0;
+      const url = item.statusHref ? `https://x.com${item.statusHref}` : "";
+      if (!item.content) continue;
+      docs.push({
+        text: item.content,
+        url,
+        engagement: likes + shares + comments,
+        views,
+        sentiment: inferTwitterSentiment(item.content),
+      });
+    }
+  } catch {
+    /* skip twitter */
+  }
+
+  try {
+    for (const row of readCsv(DATA_FILES.online)) {
+      const date = parseDmyDate(row["Date & Time"]);
+      if (!inDateRange(date, start, end)) continue;
+      if (
+        !matchesAdvancedSearch(filters, {
+          title: row.Heading,
+          summary: row.Summary,
+          content: row.Content,
+          author: [row.Publication, row.Authors].filter(Boolean).join(" "),
+          url: row.Links,
+        })
+      ) {
+        continue;
+      }
+      const text = [row.Heading, row.Summary, row.Content].filter(Boolean).join(" ");
+      const url = parseFirstUrl(row.Links);
+      if (!text) continue;
+      docs.push({
+        text,
+        url,
+        engagement: 1,
+        views: 0,
+        sentiment: normalizeSentiment(row.Sentiment),
+      });
+    }
+  } catch {
+    /* skip online */
+  }
+
+  try {
+    for (const row of readCsv(DATA_FILES.youtube)) {
+      const date = parseDmyDate(row["Date & Time"]);
+      if (!inDateRange(date, start, end)) continue;
+      if (
+        !matchesAdvancedSearch(filters, {
+          title: row.Headline,
+          author: row.Channel,
+          summary: row.Summary,
+          content: row.Summary,
+          url: row.Link,
+        })
+      ) {
+        continue;
+      }
+      const text = [row.Headline, row.Summary].filter(Boolean).join(" ");
+      const url = sanitizeHttpUrl(row.Link);
+      const likes = parseEngagementNumber(row.Likes);
+      const comments = parseEngagementNumber(row.Comments);
+      if (!text) continue;
+      docs.push({
+        text,
+        url,
+        engagement: likes + comments,
+        views: 0,
+        sentiment: normalizeSentiment(row.Semetiment ?? row.Sentiment),
+      });
+    }
+  } catch {
+    /* skip youtube */
+  }
+
+  return docs;
+}
+
+function formatCompactCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "–";
+  if (value >= 1_000_000) {
+    const n = value / 1_000_000;
+    return `${n >= 10 ? n.toFixed(0) : n.toFixed(1).replace(/\.0$/, "")}M`;
+  }
+  if (value >= 1_000) {
+    const n = value / 1_000;
+    return `${n >= 10 ? n.toFixed(0) : n.toFixed(1).replace(/\.0$/, "")}K`;
+  }
+  return String(Math.round(value));
+}
+
+export interface TrendingTopicItem {
+  cluster: string;
+  url: string;
+  mentions: string;
+  reach: string;
+  engagement: string;
+  mix: { positive: number; negative: number; neutral: number };
+}
+
+export function buildTrendingTopics(
+  filters: ChartFilters = {},
+  limit = 5
+): TrendingTopicItem[] {
+  const docs = collectMentionDocs(filters);
+  const withUrl = docs.filter((d) => /^https?:\/\//i.test((d.url ?? "").trim()));
+
+  type ThemeAgg = {
+    matched: MentionDoc[];
+    engagement: number;
+    reach: number;
+    buckets: { positive: number; negative: number; neutral: number };
+  };
+
+  const aggs: ThemeAgg[] = EXEC_THEMES.map((theme) => {
+    const matched = withUrl.filter((d) => theme.pattern.test(d.text));
+    if (!matched.length) return null;
+    const buckets = { positive: 0, negative: 0, neutral: 0 };
+    let engagement = 0;
+    let reach = 0;
+    for (const d of matched) {
+      buckets[d.sentiment] += 1;
+      engagement += d.engagement;
+      reach += d.views;
+    }
+    return { matched, engagement, reach, buckets };
+  }).filter((a): a is ThemeAgg => Boolean(a));
+
+  aggs.sort((a, b) => b.matched.length - a.matched.length);
+
+  const usedUrls = new Set<string>();
+  const rows: TrendingTopicItem[] = [];
+
+  for (const agg of aggs) {
+    if (rows.length >= limit) break;
+    const ranked = [...agg.matched].sort(
+      (a, b) => b.engagement - a.engagement || b.views - a.views
+    );
+    const best = ranked.find((d) => !usedUrls.has(d.url.trim())) ?? ranked[0];
+    if (!best?.url) continue;
+    const url = best.url.trim();
+    if (usedUrls.has(url)) continue;
+    usedUrls.add(url);
+
+    const total =
+      agg.buckets.positive + agg.buckets.negative + agg.buckets.neutral || 1;
+    rows.push({
+      cluster: trimSnippet(best.text.replace(/\s+/g, " ").trim(), 220),
+      url,
+      mentions: String(agg.matched.length),
+      reach: formatCompactCount(agg.reach),
+      engagement: formatCompactCount(agg.engagement),
+      mix: {
+        positive: Math.round((agg.buckets.positive / total) * 100),
+        negative: Math.round((agg.buckets.negative / total) * 100),
+        neutral: Math.round((agg.buckets.neutral / total) * 100),
+      },
+    });
+  }
+
+  if (rows.length >= limit) return rows;
+
+  const fillers = [...withUrl]
+    .filter((d) => !usedUrls.has(d.url.trim()))
+    .sort((a, b) => b.engagement - a.engagement || b.views - a.views)
+    .slice(0, limit - rows.length)
+    .map((d) => {
+      const mix =
+        d.sentiment === "positive"
+          ? { positive: 100, negative: 0, neutral: 0 }
+          : d.sentiment === "negative"
+            ? { positive: 0, negative: 100, neutral: 0 }
+            : { positive: 0, negative: 0, neutral: 100 };
+      return {
+        cluster: trimSnippet(d.text.replace(/\s+/g, " ").trim(), 220),
+        url: d.url.trim(),
+        mentions: "1",
+        reach: formatCompactCount(d.views),
+        engagement: formatCompactCount(d.engagement),
+        mix,
+      } satisfies TrendingTopicItem;
+    });
+
+  return [...rows, ...fillers].slice(0, limit);
+}
+
+export function buildExecutiveSummary(
+  filters: ChartFilters = {},
+  platforms: PlatformChartPayload[] = []
+): ExecutiveSummaryPayload {
+  const { start, end } = resolveFilterRange(filters);
+  const rangeLabel = `${formatShortDate(toIsoDate(start))} – ${formatShortDate(toIsoDate(end))}`;
+
+  const totalMentions = platforms.reduce((sum, p) => sum + (p.kpis?.totalMentions ?? 0), 0);
+  const totalEngagement = platforms.reduce((sum, p) => sum + (p.kpis?.totalEngagement ?? 0), 0);
+  const totalReach = platforms.reduce((sum, p) => sum + (p.kpis?.totalReach ?? 0), 0);
+
+  const sentiment = { positive: 0, negative: 0, neutral: 0 };
+  for (const p of platforms) {
+    for (const s of p.sentiment ?? []) {
+      const key = s.name.toLowerCase() as SentimentBucket;
+      if (key in sentiment) sentiment[key] += s.value;
+    }
+  }
+  const sentTotal = sentiment.positive + sentiment.negative + sentiment.neutral || 1;
+  const posPct = Math.round((sentiment.positive / sentTotal) * 100);
+  const negPct = Math.round((sentiment.negative / sentTotal) * 100);
+  const neuPct = Math.max(0, 100 - posPct - negPct);
+  const dominant =
+    sentiment.positive >= sentiment.negative && sentiment.positive >= sentiment.neutral
+      ? "positive"
+      : sentiment.negative >= sentiment.neutral
+        ? "negative"
+        : "neutral";
+
+  const corpus = collectExecutiveCorpus(filters);
+  const themeHits = EXEC_THEMES.map((theme) => {
+    let count = 0;
+    for (const text of corpus) {
+      if (theme.pattern.test(text)) count += 1;
+    }
+    return { ...theme, count };
+  })
+    .filter((t) => t.count > 0)
+    .sort((a, b) => b.count - a.count);
+
+  const platformBits = platforms
+    .filter((p) => (p.kpis?.totalMentions ?? 0) > 0)
+    .map((p) => {
+      const label =
+        p.platform === "twitter"
+          ? "X"
+          : p.platform === "online"
+            ? "web"
+            : p.platform === "youtube"
+              ? "YouTube"
+              : p.platform === "instagram"
+                ? "Instagram"
+                : "Facebook";
+      return `${label} (${p.kpis.totalMentions.toLocaleString("en-IN")})`;
+    })
+    .join(", ");
+
+  const topThemeLine =
+    themeHits.length > 0
+      ? `The sharpest clusters were ${themeHits
+          .slice(0, 3)
+          .map((t) => t.lead.replace(/:$/, "").toLowerCase())
+          .join("; ")}.`
+      : "Discourse mixed tributes to fallen soldiers with contested claims about Operation Sindoor losses.";
+
+  const paragraph =
+    `Between ${rangeLabel}, SAMVAD tracked ${totalMentions.toLocaleString("en-IN")} mentions` +
+    (platformBits ? ` across ${platformBits}` : "") +
+    ` on the Operation Sindoor controversy — especially narratives around martyrs, casualty figures, and how those deaths were framed online and in news.` +
+    ` Combined engagement reached ${totalEngagement.toLocaleString("en-IN")}` +
+    (totalReach > 0 ? ` with about ${totalReach.toLocaleString("en-IN")} measured views/reach on X` : "") +
+    `. Overall tone tilted ${dominant} (${posPct}% positive, ${negPct}% negative, ${neuPct}% neutral). ${topThemeLine}`;
+
+  const bullets: { lead: string; body: string }[] = themeHits.slice(0, 5).map((t) => ({
+    lead: t.lead,
+    body: `${t.body} (~${t.count.toLocaleString("en-IN")} matching items in the scanned corpus.)`,
+  }));
+
+  if (bullets.length < 5) {
+    bullets.push({
+      lead: "Cross-platform diffusion:",
+      body: ` The same martyr-/casualty-framed arguments travelled across news sites, X threads, and video platforms, amplifying both tribute content and controversy claims.`,
+    });
+  }
+  if (bullets.length < 5) {
+    bullets.push({
+      lead: "Sentiment split:",
+      body: ` Positive posts clustered around remembrance and operational defence; negative posts clustered around alleged misstatements and inflated casualty narratives.`,
+    });
+  }
+
+  return {
+    paragraph,
+    bullets: bullets.slice(0, 6),
+  };
 }
 
 

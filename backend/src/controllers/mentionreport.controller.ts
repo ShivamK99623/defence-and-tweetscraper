@@ -18,8 +18,8 @@ export async function getAllPlatformChartDataHandler(
     res.json({
       success: true,
       meta: buildChartMeta(filters),
-      executiveSummary: buildExecutiveSummary(filters, data),
-      trendingTopics: buildTrendingTopics(filters),
+      executiveSummary: await buildExecutiveSummary(filters, data),
+      trendingTopics: await buildTrendingTopics(filters),
       data,
     });
   } catch (error) {

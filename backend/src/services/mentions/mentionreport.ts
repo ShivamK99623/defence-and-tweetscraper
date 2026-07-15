@@ -1,6 +1,8 @@
 import fs from "fs";
 import path from "path";
 import ExcelJS from "exceljs";
+import { qIdent, qTable } from "@/lib/db/pg-sql";
+import { queryAll } from "@/lib/db/run-query";
 
 
 const REPORT_START = new Date("2026-06-25T00:00:00");
@@ -408,14 +410,13 @@ export function parseChartFiltersFromQuery(query: any): ChartFilters {
 
 
 const DATA_FILES = {
-  twitter: path.join( "reports/twitter/merged_timeline_graph.json"),
   online: path.join("reports/Op Sindoor_Online_25jun_to_12july.csv"),
-  youtube: path.join( "reports/Op Sindoor_YT_25jun_to_12july.csv"),
+  youtube: path.join("reports/Op Sindoor_YT_25jun_to_12july.csv"),
   instagram: path.join("reports/Op Sindoor_Insta_25jun_to_12july.csv"),
   facebook: path.join("reports/Op Sindoor_FB_25jun_to_12july.csv"),
 } as const;
 
-export type PlatformKey = keyof typeof DATA_FILES;
+export type PlatformKey = "twitter" | keyof typeof DATA_FILES;
 
 export type SentimentBucket = "positive" | "negative" | "neutral";
 
@@ -1026,47 +1027,115 @@ function trackEntity(
   map.set(key, existing);
 }
 
-interface TwitterImage {
-  original?: string;
-  local?: string;
-  ok?: boolean;
+interface TwitterDbRow {
+  newsId: string;
+  headline: string | null;
+  sentiment: string | null;
+  handle: string | null;
+  language: string | null;
+  url: string | null;
+  summary: string | null;
+  likes: number | null;
+  retweets: number | null;
+  replies: number | null;
+  quotes: number | null;
+  viewCount: number | null;
+  postedTime: Date | string | null;
+  category: unknown;
 }
 
-interface TwitterRecord {
-  username: string;
-  datetime: string;
-  content: string;
-  statusHref?: string;
-  images?: TwitterImage[];
-  stats: {
-    replies?: number;
-    reposts?: number;
-    likes?: number;
-    views?: number;
-  };
-}
-
-function twitterPostImage(item: TwitterRecord): string {
-  const images = item.images ?? [];
-  for (const image of images) {
-    const remote = image.original?.trim();
-    if (remote) return remote;
+function twitterCategoryTags(category: unknown): string {
+  if (Array.isArray(category)) {
+    return category
+      .map((v) => String(v ?? "").trim())
+      .filter(Boolean)
+      .join(" ");
   }
+  if (typeof category === "string") return category.trim();
   return "";
 }
 
-function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
-  const { start, end } = resolveFilterRange(filters);
-  const raw = JSON.parse(fs.readFileSync(DATA_FILES.twitter, "utf8")) as TwitterRecord[];
-  const filtered = raw.filter((item) => {
-    const date = new Date(item.datetime);
-    if (!inDateRange(date, start, end)) return false;
-    return matchesAdvancedSearch(filters, {
-      content: item.content,
-      author: item.username,
-      url: item.statusHref ? `https://x.com${item.statusHref}` : "",
-    });
+function parseTwitterPostedTime(
+  value: Date | string | null | undefined
+): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  const str = String(value).trim();
+  if (!str) return null;
+  const normalized = str.includes("T") ? str : str.replace(" ", "T");
+  const withZone =
+    /Z$/i.test(normalized) || /[+-]\d{2}:\d{2}$/.test(normalized)
+      ? normalized
+      : `${normalized}Z`;
+  const date = new Date(withZone);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function twitterSentiment(
+  dbSentiment: string | null | undefined,
+  content: string
+): SentimentBucket {
+  const raw = (dbSentiment ?? "").trim();
+  if (raw) return normalizeSentiment(raw);
+  return inferTwitterSentiment(content);
+}
+
+/** Fetch X rows from `twitter_news` for an IST calendar date range. */
+async function fetchTwitterNewsRows(
+  start: Date,
+  end: Date
+): Promise<TwitterDbRow[]> {
+  const startDay = toIsoDate(start);
+  const endDay = toIsoDate(end);
+  const table = qTable("twitter_news");
+  return queryAll<TwitterDbRow>(
+    `SELECT
+      ${qIdent("newsId")},
+      headline,
+      sentiment,
+      handle,
+      language,
+      url,
+      summary,
+      likes,
+      retweets,
+      replies,
+      quotes,
+      ${qIdent("viewCount")},
+      ${qIdent("postedTime")},
+      category
+    FROM ${table}
+    WHERE ${qIdent("postedTime")} IS NOT NULL
+      AND ((${qIdent("postedTime")} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date
+          BETWEEN ?::date AND ?::date`,
+    [startDay, endDay]
+  );
+}
+
+function twitterMatchesFilters(
+  filters: ChartFilters,
+  row: TwitterDbRow
+): boolean {
+  const content = (row.headline ?? "").trim();
+  const handle = (row.handle ?? "").replace(/^@/, "").trim();
+  return matchesAdvancedSearch(filters, {
+    content,
+    title: content,
+    author: handle,
+    summary: (row.summary ?? "").trim(),
+    url: (row.url ?? "").trim(),
+    tags: twitterCategoryTags(row.category),
   });
+}
+
+async function loadTwitterData(
+  filters: ChartFilters = {}
+): Promise<PlatformChartPayload> {
+  const { start, end } = resolveFilterRange(filters);
+  const raw = await fetchTwitterNewsRows(start, end);
+  const filtered = raw.filter((row) => twitterMatchesFilters(filters, row));
 
   const sentiment: Record<SentimentBucket, number> = {
     positive: 0,
@@ -1083,17 +1152,18 @@ function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
   const posts: (PostItem & { engagement: number })[] = [];
 
   for (const item of filtered) {
-    const date = new Date(item.datetime);
+    const date = parseTwitterPostedTime(item.postedTime) ?? start;
     dates.push(date);
-    users.add(item.username);
-    const bucket = inferTwitterSentiment(item.content);
+    const handle = (item.handle ?? "").replace(/^@/, "").trim() || "unknown";
+    users.add(handle);
+    const content = (item.headline ?? "").trim();
+    const bucket = twitterSentiment(item.sentiment, content);
     sentiment[bucket] += 1;
 
-    const stats = item.stats ?? {};
-    const itemLikes = stats.likes ?? 0;
-    const itemShares = stats.reposts ?? 0;
-    const itemComments = stats.replies ?? 0;
-    const itemViews = stats.views ?? 0;
+    const itemLikes = Number(item.likes ?? 0) || 0;
+    const itemShares = (Number(item.retweets ?? 0) || 0) + (Number(item.quotes ?? 0) || 0);
+    const itemComments = Number(item.replies ?? 0) || 0;
+    const itemViews = Number(item.viewCount ?? 0) || 0;
 
     likes += itemLikes;
     shares += itemShares;
@@ -1101,8 +1171,7 @@ function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
     views += itemViews;
 
     const engagement = itemLikes + itemShares + itemComments;
-    const handle = item.username.replace(/^@/, "");
-    const postUrl = item.statusHref ? `https://x.com${item.statusHref}` : "";
+    const postUrl = (item.url ?? "").trim();
     trackEntity(handles, handle, handle, `@${handle}`, engagement, bucket, {
       link: `https://x.com/${handle}`,
       views: itemViews,
@@ -1112,15 +1181,15 @@ function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
       name: handle,
       handle: `@${handle}`,
       timestamp: formatPostTimestamp(date),
-      text: trimSnippet(item.content, 170),
-      language: "en",
+      text: trimSnippet(content, 170),
+      language: (item.language ?? "").trim() || "en",
       sentiment: bucket,
       likes: itemLikes,
       shares: itemShares,
       comments: itemComments,
       views: itemViews,
       url: postUrl,
-      image: twitterPostImage(item),
+      image: "",
       engagement,
     });
   }
@@ -1658,8 +1727,9 @@ function formatShortDate(iso: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function collectExecutiveCorpus(filters: ChartFilters): string[] {
-  return collectMentionDocs(filters).map((d) => d.text);
+async function collectExecutiveCorpus(filters: ChartFilters): Promise<string[]> {
+  const docs = await collectMentionDocs(filters);
+  return docs.map((d) => d.text);
 }
 
 interface MentionDoc {
@@ -1670,37 +1740,27 @@ interface MentionDoc {
   sentiment: SentimentBucket;
 }
 
-function collectMentionDocs(filters: ChartFilters): MentionDoc[] {
+async function collectMentionDocs(filters: ChartFilters): Promise<MentionDoc[]> {
   const { start, end } = resolveFilterRange(filters);
   const docs: MentionDoc[] = [];
 
   try {
-    const raw = JSON.parse(fs.readFileSync(DATA_FILES.twitter, "utf8")) as TwitterRecord[];
+    const raw = await fetchTwitterNewsRows(start, end);
     for (const item of raw) {
-      const date = new Date(item.datetime);
-      if (!inDateRange(date, start, end)) continue;
-      if (
-        !matchesAdvancedSearch(filters, {
-          content: item.content,
-          author: item.username,
-          url: item.statusHref ? `https://x.com${item.statusHref}` : "",
-        })
-      ) {
-        continue;
-      }
-      const stats = item.stats ?? {};
-      const likes = stats.likes ?? 0;
-      const shares = stats.reposts ?? 0;
-      const comments = stats.replies ?? 0;
-      const views = stats.views ?? 0;
-      const url = item.statusHref ? `https://x.com${item.statusHref}` : "";
-      if (!item.content) continue;
+      if (!twitterMatchesFilters(filters, item)) continue;
+      const content = (item.headline ?? "").trim();
+      if (!content) continue;
+      const likes = Number(item.likes ?? 0) || 0;
+      const shares =
+        (Number(item.retweets ?? 0) || 0) + (Number(item.quotes ?? 0) || 0);
+      const comments = Number(item.replies ?? 0) || 0;
+      const views = Number(item.viewCount ?? 0) || 0;
       docs.push({
-        text: item.content,
-        url,
+        text: content,
+        url: (item.url ?? "").trim(),
         engagement: likes + shares + comments,
         views,
-        sentiment: inferTwitterSentiment(item.content),
+        sentiment: twitterSentiment(item.sentiment, content),
       });
     }
   } catch {
@@ -1794,11 +1854,11 @@ export interface TrendingTopicItem {
   mix: { positive: number; negative: number; neutral: number };
 }
 
-export function buildTrendingTopics(
+export async function buildTrendingTopics(
   filters: ChartFilters = {},
   limit = 5
-): TrendingTopicItem[] {
-  const docs = collectMentionDocs(filters);
+): Promise<TrendingTopicItem[]> {
+  const docs = await collectMentionDocs(filters);
   const withUrl = docs.filter((d) => /^https?:\/\//i.test((d.url ?? "").trim()));
 
   type ThemeAgg = {
@@ -1880,10 +1940,10 @@ export function buildTrendingTopics(
   return [...rows, ...fillers].slice(0, limit);
 }
 
-export function buildExecutiveSummary(
+export async function buildExecutiveSummary(
   filters: ChartFilters = {},
   platforms: PlatformChartPayload[] = []
-): ExecutiveSummaryPayload {
+): Promise<ExecutiveSummaryPayload> {
   const { start, end } = resolveFilterRange(filters);
   const rangeLabel = `${formatShortDate(toIsoDate(start))} – ${formatShortDate(toIsoDate(end))}`;
 
@@ -1909,7 +1969,7 @@ export function buildExecutiveSummary(
         ? "negative"
         : "neutral";
 
-  const corpus = collectExecutiveCorpus(filters);
+  const corpus = await collectExecutiveCorpus(filters);
   const themeHits = EXEC_THEMES.map((theme) => {
     let count = 0;
     for (const text of corpus) {

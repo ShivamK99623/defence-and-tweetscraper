@@ -7,3 +7,5 @@ twitter-raw/
 twiiter-curl.json
 tweets-parsed.json
 node_modules/
+reports/
+.next/

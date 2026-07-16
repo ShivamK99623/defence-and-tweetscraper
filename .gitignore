@@ -9,3 +9,4 @@ tweets-parsed.json
 node_modules/
 reports/
 .next/
+data/

@@ -18,6 +18,38 @@ function extractTranslatedText(tweet) {
   return grok.data.translation || grok.data.preview_translation || null;
 }
 
+/** Pull sentiment if X includes it (often absent on public timelines). */
+function extractSentiment(tweet) {
+  if (!tweet) return null;
+
+  const candidates = [
+    tweet.sentiment,
+    tweet.legacy?.sentiment,
+    tweet.ext?.sentiment,
+    tweet.grok_annotations?.sentiment,
+    tweet.grok_annotations?.emotion,
+    tweet.card?.legacy?.binding_values?.sentiment?.string_value,
+  ];
+
+  for (const s of candidates) {
+    if (s == null || s === "") continue;
+    if (typeof s === "string" || typeof s === "number") return s;
+    if (typeof s === "object") {
+      return (
+        s.label ||
+        s.value ||
+        s.sentiment ||
+        s.type ||
+        s.name ||
+        (typeof s.score === "number" ? s : null) ||
+        null
+      );
+    }
+  }
+
+  return null;
+}
+
 function mapMedia(legacy) {
   return (
     legacy?.extended_entities?.media?.map((m) => ({
@@ -48,6 +80,7 @@ function mapNestedTweet(tweet) {
     text: note?.text || legacy.full_text,
     language,
     otherLangTxt,
+    sentiment: extractSentiment(tweet),
 
     authorId: user?.rest_id,
     authorName: userCore.name,
@@ -87,6 +120,7 @@ function mapTweet(tweet, comments = []) {
     text: note?.text || legacy.full_text,
     language,
     otherLangTxt,
+    sentiment: extractSentiment(tweet),
 
     authorId: user?.rest_id,
     authorName: userCore.name,
@@ -211,6 +245,8 @@ module.exports = {
   mapTweet,
   unwrapTweet,
   getInstructions,
+  extractSentiment,
+  extractTranslatedText,
 };
 
 if (require.main === module) {

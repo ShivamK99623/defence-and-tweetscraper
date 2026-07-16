@@ -1,8 +1,0 @@
-user-tweets.json
-.env
-twitter-auth.json
-twitter-raw/
-.twitter-cookie-jar.txt
-.twitter-page-*.json
-tweets-parsed.json
-node_modules/

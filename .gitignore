@@ -1,7 +1,7 @@
 graphify-out/
 .claude/
-twitter-auth.json
 twitter-raw/
+twitter-auth.json
 .twitter-cookie-jar.txt
 .twitter-page-*.json
 twiiter-curl.json
@@ -9,3 +9,10 @@ tweets-parsed.json
 node_modules/
 .next/
 data/
+
+user-tweets.json
+twitter-raw/
+.twitter-cookie-jar.txt
+.twitter-page-*.json
+tweets-parsed.json
+node_modules/

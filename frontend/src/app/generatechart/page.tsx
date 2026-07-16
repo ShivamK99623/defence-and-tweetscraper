@@ -19,7 +19,6 @@ import {
   FaXTwitter,
   FaShareNodes,
   FaRegEye,
-  FaUsers,
   FaPlay,
   FaRegThumbsUp,
   FaRegComment,
@@ -138,6 +137,8 @@ interface PlatformChartPayload {
     uniqueSources: number;
     totalEngagement: number;
     totalReach: number;
+    /** Sum of post views (Twitter/X only). */
+    totalViews?: number;
     socialMentions: number;
     socialUsers: number;
     webMentions: number;
@@ -219,6 +220,8 @@ const SEARCH_FIELD_LABELS: Record<SearchFieldKey, string> = {
 
 interface ChartFilters {
   keyword: string;
+  /** Terms that must NOT appear — any match removes the row. */
+  excludeKeyword: string;
   keywordMode: KeywordMode;
   searchFields: SearchFieldKey[];
   startDate: string;
@@ -229,6 +232,7 @@ interface ChartFilters {
 interface ChartMeta {
   reportTitle: string;
   keyword: string;
+  excludeKeyword?: string;
   keywordMode?: KeywordMode;
   searchFields?: SearchFieldKey[];
   dateRange: { start: string; end: string };
@@ -258,12 +262,78 @@ function formatDateRangeLabel(start: string, end: string): string {
   return `${fmt(start)} - ${fmt(end)}`;
 }
 
+function normalizeLocalSearchText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u201A\u201B`]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function stripLocalWrappingQuotes(token: string): string {
+  let t = token.trim();
+  for (let i = 0; i < 3 && t.length >= 2; i += 1) {
+    const first = t[0];
+    const last = t[t.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      t = t.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return t;
+}
+
+function parseLocalKeywords(raw: string): string[] {
+  // Normalize first so smart/curly quotes become ASCII and phrase regex matches.
+  const text = normalizeLocalSearchText(raw ?? "").trim();
+  if (!text) return [];
+  const out: string[] = [];
+  const re = /"([^"]+)"|'([^']+)'|([^,;]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const token = stripLocalWrappingQuotes((m[1] ?? m[2] ?? m[3] ?? "").trim());
+    if (token) out.push(token);
+  }
+  return out;
+}
+
+function splitLocalIncludeExclude(raw: string): { keyword: string; excludeKeyword: string } {
+  const text = raw.trim();
+  if (!text) return { keyword: "", excludeKeyword: "" };
+  const splitRe = /\b(?:exclude|not|excluding)\s*:\s*/i;
+  const m = splitRe.exec(text);
+  if (!m || m.index < 0) return { keyword: text, excludeKeyword: "" };
+  return {
+    keyword: text.slice(0, m.index).trim(),
+    excludeKeyword: text.slice(m.index + m[0].length).trim(),
+  };
+}
+
+function formatLocalKeywordList(terms: string[], joiner: string): string {
+  return terms.map((t) => (t.includes(" ") ? `"${t}"` : t)).join(joiner);
+}
+
 function describeQueryLocal(filters: ChartFilters): Pick<
   ChartMeta,
   "queryType" | "queryTypeLabel" | "generatedQuery"
 > {
   const raw = filters.keyword.trim();
+  const excluded = parseLocalKeywords(filters.excludeKeyword);
+  const excludeClause =
+    excluded.length > 0
+      ? ` NOT (${formatLocalKeywordList(excluded, " OR ")})`
+      : "";
+
   if (!raw) {
+    if (excluded.length) {
+      return {
+        queryType: "none",
+        queryTypeLabel: "Exclude keywords only",
+        generatedQuery: `(all mentions in date range)${excludeClause}`,
+      };
+    }
     return {
       queryType: "none",
       queryTypeLabel: "No keyword filter",
@@ -273,28 +343,35 @@ function describeQueryLocal(filters: ChartFilters): Pick<
   if (/[()]|\b(and|or)\b|&&|\|\|/i.test(raw)) {
     return {
       queryType: "boolean",
-      queryTypeLabel: "Boolean expression (AND / OR / groups)",
-      generatedQuery: raw,
+      queryTypeLabel: excluded.length
+        ? "Boolean expression + exclude keywords"
+        : "Boolean expression (AND / OR / groups)",
+      generatedQuery: `${raw}${excludeClause}`,
     };
   }
-  const terms = raw
-    .split(/[,;]/)
-    .map((t) => t.trim().replace(/^["']|["']$/g, ""))
-    .filter(Boolean);
+  const terms = parseLocalKeywords(raw);
   const joiner = filters.keywordMode === "or" ? " OR " : " AND ";
   return {
     queryType: filters.keywordMode === "or" ? "keyword_or" : "keyword_and",
     queryTypeLabel:
       filters.keywordMode === "or"
-        ? "Keyword list (OR — any term matches)"
-        : "Keyword list (AND — all terms must match)",
-    generatedQuery: terms.map((t) => (t.includes(" ") ? `"${t}"` : t)).join(joiner) || raw,
+        ? excluded.length
+          ? "Keyword list (OR) + exclude"
+          : "Keyword list (OR — any term matches)"
+        : excluded.length
+          ? "Keyword list (AND) + exclude"
+          : "Keyword list (AND — all terms must match)",
+    generatedQuery:
+      `${formatLocalKeywordList(terms, joiner) || raw}${excludeClause}`,
   };
 }
 
 function buildAllUrl(base: string, filters: ChartFilters): string {
   const params = new URLSearchParams();
   if (filters.keyword.trim()) params.set("keyword", filters.keyword.trim());
+  if (filters.excludeKeyword.trim()) {
+    params.set("excludeKeyword", filters.excludeKeyword.trim());
+  }
   if (filters.keywordMode) params.set("keywordMode", filters.keywordMode);
   if (filters.searchFields.length && filters.searchFields.length < ALL_SEARCH_FIELDS.length) {
     params.set("searchFields", filters.searchFields.join(","));
@@ -402,9 +479,8 @@ function Slide({
         data-slide-surface
       >
         <div
-          className={`flex h-full w-full flex-col px-10 pb-14 pt-5 ${
-            center ? "items-center justify-center" : ""
-          }`}
+          className={`flex h-full w-full flex-col px-10 pb-14 pt-5 ${center ? "items-center justify-center" : ""
+            }`}
         >
           {children}
         </div>
@@ -570,9 +646,11 @@ function MiniFace({ sentiment, size = 15 }: { sentiment: SentimentBucket; size?:
 function KpiRow({
   data,
   platform,
+  platformReach,
 }: {
   data: PlatformChartPayload;
   platform: PlatformKey | "overview";
+  platformReach?: PlatformChartPayload[];
 }) {
   const percents = sentimentPercents(data.sentiment);
   const breakdown = data.engagementBreakdown ?? [];
@@ -580,18 +658,22 @@ function KpiRow({
   const shares = breakdown.find((b) => b.name === "Shares")?.value ?? 0;
   const comments = breakdown.find((b) => b.name === "Comments")?.value ?? 0;
   const reach = data.kpis.totalReach;
+  const views = data.kpis.totalViews ?? 0;
   const mix: SentimentMix = {
     positive: data.sentiment.find((s) => s.name.toLowerCase() === "positive")?.value ?? 0,
     negative: data.sentiment.find((s) => s.name.toLowerCase() === "negative")?.value ?? 0,
     neutral: data.sentiment.find((s) => s.name.toLowerCase() === "neutral")?.value ?? 0,
   };
 
-  const hideSocialReach = platform === "online";
+  const hideSocialReach = platform === "online" && reach <= 0;
   const showFollowerReach =
+    platform === "twitter" ||
     platform === "youtube" ||
     platform === "instagram" ||
     platform === "facebook" ||
     platform === "overview";
+  const reachUnit =
+    platform === "online" ? "views" : showFollowerReach ? "followers" : "unique";
 
   return (
     <div
@@ -628,7 +710,7 @@ function KpiRow({
               {reach > 0 ? formatNumber(reach) : "–"}
             </p>
             <p className="text-[11px]" style={{ color: C.muted }}>
-              {showFollowerReach ? "followers" : "unique"}
+              {reachUnit}
             </p>
             {reach > 0 && platform === "twitter" ? (
               <p className="mt-1 flex items-center gap-1 text-[11px]" style={{ color: C.muted }}>
@@ -650,6 +732,43 @@ function KpiRow({
                 <FaFacebook style={{ color: "#1877F2" }} /> {formatNumber(reach)}
               </p>
             ) : null}
+            {platform === "overview" && platformReach?.length ? (
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]" style={{ color: C.muted }}>
+                {platformReach.map((p) => {
+                  const r = p.kpis.totalReach ?? 0;
+                  if (r <= 0) return null;
+                  if (p.platform === "twitter") {
+                    return (
+                      <span key={p.platform} className="inline-flex items-center gap-1">
+                        <FaXTwitter style={{ color: C.cyan }} /> {formatNumber(r)}
+                      </span>
+                    );
+                  }
+                  if (p.platform === "youtube") {
+                    return (
+                      <span key={p.platform} className="inline-flex items-center gap-1">
+                        <FaYoutube style={{ color: C.ytRed }} /> {formatNumber(r)}
+                      </span>
+                    );
+                  }
+                  if (p.platform === "instagram") {
+                    return (
+                      <span key={p.platform} className="inline-flex items-center gap-1">
+                        <FaInstagram style={{ color: "#E1306C" }} /> {formatNumber(r)}
+                      </span>
+                    );
+                  }
+                  if (p.platform === "facebook") {
+                    return (
+                      <span key={p.platform} className="inline-flex items-center gap-1">
+                        <FaFacebook style={{ color: "#1877F2" }} /> {formatNumber(r)}
+                      </span>
+                    );
+                  }
+                  return null;
+                })}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -665,13 +784,17 @@ function KpiRow({
           <p className="text-[11px]" style={{ color: C.muted }}>total</p>
           {breakdown.length > 0 ? (
             <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px]" style={{ color: C.muted }}>
-              <span className="inline-flex items-center gap-1"><FaRegThumbsUp /> {formatNumber(likes)}</span>
+              {likes > 0 ? (
+                <span className="inline-flex items-center gap-1"><FaRegThumbsUp /> {formatNumber(likes)}</span>
+              ) : null}
               {shares > 0 ? (
                 <span className="inline-flex items-center gap-1"><FaShareNodes /> {formatNumber(shares)}</span>
               ) : null}
-              <span className="inline-flex items-center gap-1"><FaRegComment /> {formatNumber(comments)}</span>
-              {reach > 0 && platform === "twitter" ? (
-                <span className="inline-flex items-center gap-1"><FaRegEye /> {formatNumber(reach)}</span>
+              {comments > 0 ? (
+                <span className="inline-flex items-center gap-1"><FaRegComment /> {formatNumber(comments)}</span>
+              ) : null}
+              {views > 0 && (platform === "twitter" || platform === "youtube") ? (
+                <span className="inline-flex items-center gap-1"><FaRegEye /> {formatNumber(views)}</span>
               ) : null}
             </div>
           ) : null}
@@ -844,18 +967,24 @@ const COL_TEMPLATE_NO_METRIC = "44px 52px 1fr 96px 118px 96px";
 
 function rankingMetricLabel(platform: PlatformKey): string | null {
   if (platform === "online") return null;
-  if (platform === "twitter") return "Views";
-  if (platform === "youtube" || platform === "instagram" || platform === "facebook") {
+  if (
+    platform === "twitter" ||
+    platform === "youtube" ||
+    platform === "instagram" ||
+    platform === "facebook"
+  ) {
     return "Followers";
   }
   return null;
 }
 
 function rankingMetricValue(row: TopEntityRow, platform: PlatformKey): string {
-  if (platform === "twitter") {
-    return row.views != null ? formatNumber(row.views) : "–";
-  }
-  if (platform === "youtube" || platform === "instagram" || platform === "facebook") {
+  if (
+    platform === "twitter" ||
+    platform === "youtube" ||
+    platform === "instagram" ||
+    platform === "facebook"
+  ) {
     return row.followers != null ? formatNumber(row.followers) : "–";
   }
   return "–";
@@ -1144,9 +1273,18 @@ function PostCard({ post }: { post: PostItem }) {
         <CardIconRow>
           <MiniFace sentiment={post.sentiment} />
           <LangTag lang={post.language} />
-          <span className="inline-flex items-center gap-1"><FaShareNodes /> {formatNumber(post.shares)}</span>
-          <span className="inline-flex items-center gap-1"><FaRegEye /> {formatNumber(post.views)}</span>
-          <span className="inline-flex items-center gap-1"><FaUsers /> {formatNumber(post.likes)}</span>
+          {post.likes > 0 ? (
+            <span className="inline-flex items-center gap-1"><FaRegThumbsUp /> {formatNumber(post.likes)}</span>
+          ) : null}
+          {post.comments > 0 ? (
+            <span className="inline-flex items-center gap-1"><FaRegComment /> {formatNumber(post.comments)}</span>
+          ) : null}
+          {post.shares > 0 ? (
+            <span className="inline-flex items-center gap-1"><FaShareNodes /> {formatNumber(post.shares)}</span>
+          ) : null}
+          {post.views > 0 ? (
+            <span className="inline-flex items-center gap-1"><FaRegEye /> {formatNumber(post.views)}</span>
+          ) : null}
         </CardIconRow>
       </div>
     </div>
@@ -1230,8 +1368,15 @@ function VideoCard({ video }: { video: VideoItem }) {
         <CardIconRow>
           <MiniFace sentiment={video.sentiment} />
           <LangTag lang={video.language} />
-          <span className="inline-flex items-center gap-1"><FaRegThumbsUp /> {formatNumber(video.likes)}</span>
-          <span className="inline-flex items-center gap-1"><FaRegComment /> {formatNumber(video.comments)}</span>
+          {video.likes > 0 ? (
+            <span className="inline-flex items-center gap-1"><FaRegThumbsUp /> {formatNumber(video.likes)}</span>
+          ) : null}
+          {video.comments > 0 ? (
+            <span className="inline-flex items-center gap-1"><FaRegComment /> {formatNumber(video.comments)}</span>
+          ) : null}
+          {video.views > 0 ? (
+            <span className="inline-flex items-center gap-1"><FaRegEye /> {formatNumber(video.views)}</span>
+          ) : null}
           {video.url ? (
             <a href={video.url} target="_blank" rel="noopener noreferrer" aria-label="Open video">
               <FaPlay style={{ color: C.ytRed }} />
@@ -1282,7 +1427,7 @@ interface TrendingTopicItem {
   mix: SentimentMix;
 }
 
-function TrendingTopics({ topics, startRank = 0 }: { topics: TrendingTopicItem[] , startRank?: number}) {
+function TrendingTopics({ topics, startRank = 0 }: { topics: TrendingTopicItem[], startRank?: number }) {
   const cols = "40px 1fr 96px 96px 118px 104px";
   if (!topics.length) return null;
   return (
@@ -1483,6 +1628,17 @@ function OverviewSlide({ platforms }: { platforms: PlatformChartPayload[] }) {
       ),
       color: SENTIMENT_COLOR[key],
     }));
+    const breakdownNames = ["Likes", "Shares", "Comments"] as const;
+    const engagementBreakdown = breakdownNames
+      .map((name) => ({
+        name,
+        value: platforms.reduce(
+          (s, p) =>
+            s + (p.engagementBreakdown?.find((b) => b.name === name)?.value ?? 0),
+          0
+        ),
+      }))
+      .filter((b) => b.value > 0);
     return {
       platform: "twitter" as PlatformKey,
       title: "Overview",
@@ -1490,9 +1646,18 @@ function OverviewSlide({ platforms }: { platforms: PlatformChartPayload[] }) {
       kpis: {
         totalMentions: sum((p) => p.kpis.totalMentions),
         uniqueSources: sum((p) => p.kpis.socialUsers + p.kpis.webSites),
-        totalEngagement: sum((p) => p.kpis.totalEngagement),
+        totalEngagement: platforms
+          .filter((p) => p.platform !== "online")
+          .reduce((s, p) => s + (p.kpis.totalEngagement ?? 0), 0),
         totalReach: platforms
-          .filter((p) => p.platform === "youtube" || p.platform === "instagram" || p.platform === "facebook")
+          .filter(
+            (p) =>
+              p.platform === "twitter" ||
+              p.platform === "youtube" ||
+              p.platform === "instagram" ||
+              p.platform === "facebook" ||
+              p.platform === "online"
+          )
           .reduce((s, p) => s + (p.kpis.totalReach ?? 0), 0),
         socialMentions: sum((p) => p.kpis.socialMentions),
         socialUsers: sum((p) => p.kpis.socialUsers),
@@ -1501,7 +1666,7 @@ function OverviewSlide({ platforms }: { platforms: PlatformChartPayload[] }) {
       },
       dailyTimeline: platforms[0]?.dailyTimeline ?? [],
       sentiment,
-      engagementBreakdown: [],
+      engagementBreakdown,
       topEntities: [],
       accentColor: "#138808",
     } satisfies PlatformChartPayload;
@@ -1523,7 +1688,7 @@ function OverviewSlide({ platforms }: { platforms: PlatformChartPayload[] }) {
         subtitle="Overall analysis"
         description="The graph shows the posts from each source channel per day."
       />
-      <KpiRow data={agg} platform="overview" />
+      <KpiRow data={agg} platform="overview" platformReach={selected} />
       <ChartBox exportKey="overview" option={groupedOverviewOption(selected, legend)} />
     </Slide>
   );
@@ -1681,8 +1846,8 @@ function PlatformPostSlides({
 
   const items: ReactNode[] =
     data.platform === "twitter" ||
-    data.platform === "instagram" ||
-    data.platform === "facebook"
+      data.platform === "instagram" ||
+      data.platform === "facebook"
       ? (data.posts ?? []).map((p, i) => <PostCard key={i} post={p} />)
       : data.platform === "online"
         ? (data.articles ?? []).map((a, i) => <ArticleCard key={i} article={a} />)
@@ -1755,6 +1920,14 @@ function PlatformSection({
     nodes.push(
       <EngagementSlide key="eng-yt" page={counter()} data={data} variant="red" title="YT- Engagement Analysis" />
     );
+  } else if (platform === "instagram" && (data.engagementBreakdown?.length ?? 0) > 0) {
+    nodes.push(
+      <EngagementSlide key="eng-ig" page={counter()} data={data} variant="cyan" title="Instagram - Engagement Analysis" />
+    );
+  } else if (platform === "facebook" && (data.engagementBreakdown?.length ?? 0) > 0) {
+    nodes.push(
+      <EngagementSlide key="eng-fb" page={counter()} data={data} variant="crimson" title="Facebook - Engagement Analysis" />
+    );
   }
 
   // Ranking table (chunks of 6)
@@ -1785,6 +1958,7 @@ function PlatformSection({
 
 const DEFAULT_FILTERS: ChartFilters = {
   keyword: "",
+  excludeKeyword: "",
   keywordMode: "and",
   searchFields: [...ALL_SEARCH_FIELDS],
   startDate: DEFAULT_START_DATE,
@@ -1797,32 +1971,36 @@ const filterFieldClass =
 
 
 // statics executive summary
-const EXECUTIVE_SUMMARY = (totalMentions: number) => {
-  return {
+  const EXECUTIVE_SUMMARY = ({ totalMentions = 0, overallSentimentPercentage = [], platformSentiments = {} as Record<PlatformKey, { percent: string; name: string; value: number; color: string }[]> }: { totalMentions: number, overallSentimentPercentage: { percent: string; name: string; value: number; color: string }[], platformSentiments: Record<string, { percent: string; name: string; value: number; color: string }[]> }) => {
+  
+    return {
     paragraph:
-    "Between June 25 and July 12, 2026, social media and web conversations around the Operation Sindoor controversy were analyzed across X, Web, YouTube, Instagram, and Facebook to understand discussion volume, reach, sentiment, and key activity trends.",
+      "Between June 25 and July 12, 2026, social media and web conversations around the Operation Sindoor controversy were analyzed across X, Web, YouTube, Instagram, and Facebook to understand discussion volume, reach, sentiment, and key activity trends.",
 
-  bullets: [
-    {
-      lead: "Conversation Volume",
-      body:
-        `A total of ${totalMentions} mentions were tracked across all monitored platforms, with X alone reaching 20.9M users and generating a combined engagement of approximately 16.09 lakh.`
-    },
-    {
-      lead: "Sentiment Overview",
-      body:
-        "Overall sentiment remained predominantly neutral (62.3%), followed by positive (21.5%) and negative (16.3%). While X and YouTube were largely neutral and factual, Instagram (54% negative) and Facebook (66.7% negative) showed more critical discussions. Web coverage was comparatively positive (50.2%)."
-    },
-    {
-      lead: "Peak Discussion Period",
-      body:
-        "Conversation volume was concentrated between June 26 and June 28, peaking at nearly 650 mentions on June 27 following the government's first official disclosure of the names of six Operation Sindoor martyrs."
-    },
-    {
-      lead: "Recurring Activity",
-      body:
-        "After the initial surge, discussion gradually declined, with smaller spikes observed between July 5 and July 9, driven primarily by Defence Ministry statements regarding force readiness."
-    }
+    bullets: [
+      {
+        lead: "Conversation Volume",
+        body:
+          `A total of ${totalMentions} mentions were tracked across all monitored platforms, with X alone reaching 20.9M users and generating a combined engagement of approximately 16.09 lakh.`
+      },
+      {
+        lead: "Sentiment Overview",
+        body:
+          `Overall sentiment remained predominantly neutral (${overallSentimentPercentage.find(x => String(x.name).toLowerCase() === "neutral")?.percent}%), followed by positive (${overallSentimentPercentage.find(x => String(x.name).toLowerCase() === "positive")?.percent}%) and negative (${overallSentimentPercentage.find(x => String(x.name).toLowerCase() === "negative")?.percent}%). While X and YouTube were largely neutral and factual, Instagram (${platformSentiments.instagram?.find(x => String(x.name).toLowerCase() === "negative")?.percent}% negative) and Facebook (${platformSentiments.facebook?.find(x => String(x.name).toLowerCase() === "neutral")?.percent}% neutral) and Facebook (${platformSentiments.facebook?.find(x => String(x.name).toLowerCase() === "positive")?.percent}% positive) showed more critical discussions.
+           Web coverage was comparatively (${platformSentiments.online?.find(x => String(x.name).toLowerCase() === "positive")?.percent}% positive).
+           (${platformSentiments.online?.find(x => String(x.name).toLowerCase() === "positive")?.percent}% Neutral) and (${platformSentiments.online?.find(x => String(x.name).toLowerCase() === "negative")?.percent}% Negative) discussions.
+           `
+      },
+      {
+        lead: "Peak Discussion Period",
+        body:
+          "Conversation volume was concentrated between June 26 and June 28, peaking at nearly 650 mentions on June 27 following the government's first official disclosure of the names of six Operation Sindoor martyrs."
+      },
+      {
+        lead: "Recurring Activity",
+        body:
+          "After the initial surge, discussion gradually declined, with smaller spikes observed between July 5 and July 9, driven primarily by Defence Ministry statements regarding force readiness."
+      }
     ],
   };
 };
@@ -1843,7 +2021,7 @@ function formatCompactCount(value: number): string {
 
 
 // dummy trending topics
-let trendingTopicsdfd:any[] = [
+let trendingTopicsdfd: any[] = [
   {
     cluster:
       "FACT-CHECK: MoD says Op Sindoor martyrs were honoured with gallantry awards back in August 2025 — DGMO receipts shut down 'hidden casualties' claim",
@@ -1918,7 +2096,7 @@ let trendingTopicsdfd:any[] = [
   },
 ].map((item) => ({
   cluster: item.cluster,
-  url:"",
+  url: "",
   mentions: String(item.mentions),
   reach: formatCompactCount(item.reach),
   engagement: formatCompactCount(item.engagement),
@@ -1927,7 +2105,7 @@ let trendingTopicsdfd:any[] = [
     negative: item.mix.negative,
     neutral: item.mix.neutral,
   },
-})) 
+}))
 
 export default function GenerateChartPage() {
   const [draftFilters, setDraftFilters] = useState<ChartFilters>(DEFAULT_FILTERS);
@@ -1988,6 +2166,7 @@ export default function GenerateChartPage() {
         setMeta({
           reportTitle: filters.reportTitle.trim() || DEFAULT_REPORT_TITLE,
           keyword: filters.keyword.trim(),
+          excludeKeyword: filters.excludeKeyword.trim(),
           keywordMode: filters.keywordMode,
           searchFields: filters.searchFields,
           dateRange: { start: filters.startDate, end: filters.endDate },
@@ -2017,9 +2196,15 @@ export default function GenerateChartPage() {
       draftFilters.searchFields.length > 0
         ? draftFilters.searchFields
         : [...ALL_SEARCH_FIELDS];
+    const split = splitLocalIncludeExclude(draftFilters.keyword);
+    const excludeMerged = [draftFilters.excludeKeyword, split.excludeKeyword]
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .join(", ");
     const next = {
       ...draftFilters,
-      keyword: draftFilters.keyword.trim(),
+      keyword: (split.excludeKeyword ? split.keyword : draftFilters.keyword).trim(),
+      excludeKeyword: excludeMerged,
       keywordMode: draftFilters.keywordMode,
       searchFields: fields,
       reportTitle: draftFilters.reportTitle.trim() || DEFAULT_REPORT_TITLE,
@@ -2060,6 +2245,25 @@ export default function GenerateChartPage() {
     contentRef: printRef,
   });
 
+
+  const overallSentiment = platformData.reduce(
+    (acc, curr) => {
+      acc.negative += Number(curr.sentiment[0].value);
+      acc.neutral += Number(curr.sentiment[1].value)  ;
+      acc.positive += Number(curr.sentiment[2].value);
+      return acc;
+    },
+    {
+      negative: 0,
+      neutral: 0,
+      positive: 0,
+    }
+  );
+  const overallSentimentPercentage = sentimentPercents(Object.keys(overallSentiment).map(x => ({name: x, value: overallSentiment[x as keyof typeof overallSentiment]})) as any);
+  const platformSentiments = platformData.reduce((acc, curr) => {
+    acc[curr.platform] = sentimentPercents(curr.sentiment)
+    return acc;
+  }, {} as Record<string, { percent: string; name: string; value: number; color: string }[]>);
   return (
     <ReportMetaContext.Provider value={reportMeta}>
       <div className="min-h-screen print:bg-white" style={{ backgroundColor: "#ECEFF3" }}>
@@ -2137,7 +2341,7 @@ export default function GenerateChartPage() {
                   placeholder={DEFAULT_REPORT_TITLE}
                 />
               </label>
-              <label className="flex flex-col gap-1 md:col-span-4">
+              <label className="flex flex-col gap-1 md:col-span-3">
                 <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: C.muted }}>
                   Keywords
                 </span>
@@ -2153,7 +2357,24 @@ export default function GenerateChartPage() {
                   }}
                 />
               </label>
-              <div className="flex flex-col gap-1 md:col-span-2">
+              <label className="flex flex-col gap-1 md:col-span-3">
+                <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: C.muted }}>
+                  Exclude keywords
+                </span>
+                <input
+                  className={filterFieldClass}
+                  value={draftFilters.excludeKeyword}
+                  onChange={(e) =>
+                    setDraftFilters((f) => ({ ...f, excludeKeyword: e.target.value }))
+                  }
+                  placeholder='spam, "fake news", @handle'
+                  title="Remove posts that contain any of these terms (supports quoted phrases and smart quotes from paste)"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") applyFilters();
+                  }}
+                />
+              </label>
+              <div className="flex flex-col gap-1 md:col-span-1">
                 <span className="text-[11px] font-medium uppercase tracking-wide" style={{ color: C.muted }}>
                   Match
                 </span>
@@ -2203,11 +2424,11 @@ export default function GenerateChartPage() {
                   }
                 />
               </label>
-              <div className="flex items-center gap-2 md:col-span-1 md:justify-end">
-                <Button type="button" size="sm" onClick={applyFilters} disabled={loading}>
-                  Apply
-                </Button>
-              </div>
+            </div>
+            <div className="flex items-center justify-end">
+              <Button type="button" size="sm" onClick={applyFilters} disabled={loading}>
+                Apply
+              </Button>
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -2265,7 +2486,9 @@ export default function GenerateChartPage() {
                 . Also{" "}
                 <code className="rounded bg-[#F3F4F6] px-1">and</code>/
                 <code className="rounded bg-[#F3F4F6] px-1">or</code>, parentheses, quotes for phrases.
-                Plain comma lists still use the AND/OR toggle. Fields apply to every media.
+                Plain comma lists still use the AND/OR toggle.{" "}
+                <strong>Exclude keywords</strong> drop any mention that contains those terms
+                (same search fields). Fields apply to every media.
               </p>
             </div>
 
@@ -2311,6 +2534,14 @@ export default function GenerateChartPage() {
                     .join(", ")}
                   {" · "}
                   {reportMeta.dateRangeLabel}
+                  {(meta.excludeKeyword ?? appliedFilters.excludeKeyword)?.trim() ? (
+                    <>
+                      {" · Exclude: "}
+                      <code className="rounded bg-white px-1 font-mono text-[11px]">
+                        {(meta.excludeKeyword ?? appliedFilters.excludeKeyword).trim()}
+                      </code>
+                    </>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -2346,7 +2577,11 @@ export default function GenerateChartPage() {
           >
             <CoverPage />
             <OverviewSlide platforms={platformData} />
-            <ExecutiveSummary summary={EXECUTIVE_SUMMARY(platformData.reduce((acc, curr) => acc + curr.kpis.totalMentions, 0))} />
+            <ExecutiveSummary summary={EXECUTIVE_SUMMARY({
+              totalMentions: platformData.reduce((acc, curr) => acc + curr.kpis.totalMentions, 0),
+              overallSentimentPercentage,
+              platformSentiments
+            })} />
             <TrendingTopics topics={trendingTopics} />
             <TrendingTopics topics={trendingTopicsdfd} startRank={5} />
             {pages}

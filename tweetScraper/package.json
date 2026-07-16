@@ -1,0 +1,18 @@
+{
+  "name": "defence-poc",
+  "version": "1.0.0",
+  "description": "",
+  "main": "tweetparsor.js",
+  "scripts": {
+    "search": "node twitter-search.js",
+    "user": "node twitter-user.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "x-client-transaction-id": "^0.3.1"
+  }
+}

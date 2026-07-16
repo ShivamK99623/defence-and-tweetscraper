@@ -1,6 +1,5 @@
 import fs from "fs";
 import path from "path";
-import ExcelJS from "exceljs";
 
 
 const REPORT_START = new Date("2026-06-25T00:00:00");
@@ -31,6 +30,11 @@ export interface ChartFilters {
   /** Comma-separated keywords (also used for single keyword). */
   keyword?: string;
   keywordMode?: KeywordMode;
+  /**
+   * Comma-separated terms to exclude — any match removes the row
+   * (searched in the same selected fields as `keyword`).
+   */
+  excludeKeyword?: string;
   /** Fields to search; empty / omitted = all available fields. */
   searchFields?: SearchFieldKey[];
   startDate?: string; // YYYY-MM-DD
@@ -43,6 +47,7 @@ export type QueryType = "none" | "boolean" | "keyword_and" | "keyword_or";
 export interface ChartMeta {
   reportTitle: string;
   keyword: string;
+  excludeKeyword: string;
   keywordMode: KeywordMode;
   searchFields: SearchFieldKey[];
   dateRange: { start: string; end: string };
@@ -93,18 +98,70 @@ function parseSearchFields(raw: string | string[] | undefined | null): SearchFie
   return fields.length ? fields : [...ALL_SEARCH_FIELDS];
 }
 
-/** Split keywords: commas/semicolons, or quoted phrases; otherwise whitespace. */
+/** Normalize text for case-insensitive search (curly quotes, NBSP, etc.). */
+function normalizeForSearch(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u201A\u201B`]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+/** Remove one layer of wrapping single/double quotes from a parsed token. */
+function stripWrappingQuotes(token: string): string {
+  let t = token.trim();
+  // Peel nested/smart-quote layers after normalization.
+  for (let i = 0; i < 3 && t.length >= 2; i += 1) {
+    const first = t[0];
+    const last = t[t.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      t = t.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return t;
+}
+
+/**
+ * Split a keyword / exclude string into terms.
+ * Supports commas, semicolons, and "quoted phrases" / 'quoted phrases'
+ * (including curly/smart quotes from paste).
+ */
 export function parseKeywords(raw: string | undefined | null): string[] {
-  const text = (raw ?? "").trim();
+  // Normalize first so smart quotes become ASCII and phrase regex matches.
+  const text = normalizeForSearch(raw ?? "").trim();
   if (!text) return [];
   const out: string[] = [];
   const re = /"([^"]+)"|'([^']+)'|([^,;]+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
-    const token = (m[1] ?? m[2] ?? m[3] ?? "").trim().toLowerCase();
+    const token = stripWrappingQuotes((m[1] ?? m[2] ?? m[3] ?? "").trim());
     if (token) out.push(token);
   }
   return out;
+}
+
+/**
+ * If the user pastes `… Exclude: a, b` into the Keywords box (or uses
+ * `NOT:` / `-exclude:`), split that into include + exclude parts.
+ */
+export function splitIncludeExcludeRaw(raw: string | undefined | null): {
+  keyword: string;
+  excludeKeyword: string;
+} {
+  const text = (raw ?? "").trim();
+  if (!text) return { keyword: "", excludeKeyword: "" };
+
+  const splitRe = /\b(?:exclude|not|excluding)\s*:\s*/i;
+  const m = splitRe.exec(text);
+  if (!m || m.index < 0) {
+    return { keyword: text, excludeKeyword: "" };
+  }
+  const keyword = text.slice(0, m.index).trim();
+  const excludeKeyword = text.slice(m.index + m[0].length).trim();
+  return { keyword, excludeKeyword };
 }
 
 type BoolNode =
@@ -172,7 +229,7 @@ function tokenizeBooleanQuery(raw: string): BoolToken[] {
         i += 1;
       }
       if (i < s.length) i += 1; // closing quote
-      const term = value.trim().toLowerCase();
+      const term = normalizeForSearch(value.trim());
       if (term) tokens.push({ kind: "term", value: term });
       continue;
     }
@@ -183,7 +240,7 @@ function tokenizeBooleanQuery(raw: string): BoolToken[] {
     }
     const word = s.slice(i, j);
     i = j;
-    const lower = word.toLowerCase();
+    const lower = normalizeForSearch(word);
     if (lower === "and") tokens.push({ kind: "and" });
     else if (lower === "or") tokens.push({ kind: "or" });
     else if (word.trim()) tokens.push({ kind: "term", value: lower });
@@ -281,28 +338,29 @@ function buildSearchHaystack(
   const parts = selected
     .map((key) => fields[key])
     .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
-    .map((v) => v.toLowerCase());
+    .map((v) => normalizeForSearch(v));
 
   const haystackParts =
     parts.length > 0
       ? parts
       : Object.values(fields)
           .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
-          .map((v) => v.toLowerCase());
+          .map((v) => normalizeForSearch(v));
 
   if (!haystackParts.length) return null;
   return haystackParts.join(" \n ");
 }
 
-function matchesAdvancedSearch(
+function formatKeywordList(terms: string[], joiner: string): string {
+  return terms.map((k) => (k.includes(" ") ? `"${k}"` : k)).join(joiner);
+}
+
+function matchesIncludeKeywords(
   filters: ChartFilters,
-  fields: SearchFieldValues
+  hay: string
 ): boolean {
   const raw = (filters.keyword ?? "").trim();
   if (!raw) return true;
-
-  const hay = buildSearchHaystack(filters, fields);
-  if (hay == null) return false;
 
   // Boolean query: sindoor and (controversy or deaths)
   if (looksLikeBooleanQuery(raw)) {
@@ -319,6 +377,39 @@ function matchesAdvancedSearch(
     : keywords.every((k) => hay.includes(k));
 }
 
+/** True when the row must be dropped because an exclude term appears. */
+function matchesExcludeKeywords(
+  filters: ChartFilters,
+  hay: string
+): boolean {
+  const excluded = parseKeywords(filters.excludeKeyword);
+  if (!excluded.length) return false;
+  return excluded.some((k) => {
+    if (!k) return false;
+    if (hay.includes(k)) return true;
+    // `@handle` also matches the bare handle (author / mention variants).
+    if (k.startsWith("@") && k.length > 1 && hay.includes(k.slice(1))) return true;
+    return false;
+  });
+}
+
+function matchesAdvancedSearch(
+  filters: ChartFilters,
+  fields: SearchFieldValues
+): boolean {
+  const hasInclude = Boolean((filters.keyword ?? "").trim());
+  const hasExclude = parseKeywords(filters.excludeKeyword).length > 0;
+  if (!hasInclude && !hasExclude) return true;
+
+  const hay = buildSearchHaystack(filters, fields);
+  // No searchable text: fail include filters; pass exclude-only filters.
+  if (hay == null) return !hasInclude;
+
+  if (hasInclude && !matchesIncludeKeywords(filters, hay)) return false;
+  if (matchesExcludeKeywords(filters, hay)) return false;
+  return true;
+}
+
 function resolveReportTitle(filters: ChartFilters = {}): string {
   const title = (filters.reportTitle ?? "").trim();
   return title || DEFAULT_REPORT_TITLE;
@@ -330,7 +421,20 @@ function describeGeneratedQuery(filters: ChartFilters = {}): {
   generatedQuery: string;
 } {
   const raw = (filters.keyword ?? "").trim();
+  const excluded = parseKeywords(filters.excludeKeyword);
+  const excludeClause =
+    excluded.length > 0
+      ? ` NOT (${formatKeywordList(excluded, " OR ")})`
+      : "";
+
   if (!raw) {
+    if (excluded.length) {
+      return {
+        queryType: "none",
+        queryTypeLabel: "Exclude keywords only",
+        generatedQuery: `(all mentions in date range)${excludeClause}`,
+      };
+    }
     return {
       queryType: "none",
       queryTypeLabel: "No keyword filter",
@@ -343,8 +447,10 @@ function describeGeneratedQuery(filters: ChartFilters = {}): {
     if (tree) {
       return {
         queryType: "boolean",
-        queryTypeLabel: "Boolean expression (AND / OR / groups)",
-        generatedQuery: raw,
+        queryTypeLabel: excluded.length
+          ? "Boolean expression + exclude keywords"
+          : "Boolean expression (AND / OR / groups)",
+        generatedQuery: `${raw}${excludeClause}`,
       };
     }
   }
@@ -352,6 +458,13 @@ function describeGeneratedQuery(filters: ChartFilters = {}): {
   const keywords = parseKeywords(raw);
   const mode = resolveKeywordMode(filters.keywordMode);
   if (!keywords.length) {
+    if (excluded.length) {
+      return {
+        queryType: "none",
+        queryTypeLabel: "Exclude keywords only",
+        generatedQuery: `(all mentions in date range)${excludeClause}`,
+      };
+    }
     return {
       queryType: "none",
       queryTypeLabel: "No keyword filter",
@@ -360,16 +473,18 @@ function describeGeneratedQuery(filters: ChartFilters = {}): {
   }
 
   const joiner = mode === "or" ? " OR " : " AND ";
-  const generatedQuery = keywords
-    .map((k) => (k.includes(" ") ? `"${k}"` : k))
-    .join(joiner);
+  const generatedQuery = `${formatKeywordList(keywords, joiner)}${excludeClause}`;
 
   return {
     queryType: mode === "or" ? "keyword_or" : "keyword_and",
     queryTypeLabel:
       mode === "or"
-        ? "Keyword list (OR — any term matches)"
-        : "Keyword list (AND — all terms must match)",
+        ? excluded.length
+          ? "Keyword list (OR) + exclude"
+          : "Keyword list (OR — any term matches)"
+        : excluded.length
+          ? "Keyword list (AND) + exclude"
+          : "Keyword list (AND — all terms must match)",
     generatedQuery,
   };
 }
@@ -380,6 +495,7 @@ export function buildChartMeta(filters: ChartFilters = {}): ChartMeta {
   return {
     reportTitle: resolveReportTitle(filters),
     keyword: (filters.keyword ?? "").trim(),
+    excludeKeyword: (filters.excludeKeyword ?? "").trim(),
     keywordMode: resolveKeywordMode(filters.keywordMode),
     searchFields: parseSearchFields(filters.searchFields),
     dateRange: { start: toIsoDate(start), end: toIsoDate(end) },
@@ -396,8 +512,20 @@ export function parseChartFiltersFromQuery(query: any): ChartFilters {
     return typeof v === "string" ? v : "";
   };
   const fieldsRaw = pick("searchFields") || pick("fields");
+  const rawKeyword = pick("keyword") || "";
+  const rawExclude =
+    pick("excludeKeyword") || pick("exclude") || pick("notKeyword") || "";
+
+  // Support pasting `… Exclude: terms` into the Keywords box.
+  const split = splitIncludeExcludeRaw(rawKeyword);
+  const excludeKeyword = [rawExclude, split.excludeKeyword]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(", ");
+
   return {
-    keyword: pick("keyword") || undefined,
+    keyword: (split.excludeKeyword ? split.keyword : rawKeyword) || undefined,
+    excludeKeyword: excludeKeyword || undefined,
     keywordMode: resolveKeywordMode(pick("keywordMode") || pick("mode")),
     searchFields: parseSearchFields(fieldsRaw),
     startDate: pick("startDate") || undefined,
@@ -408,11 +536,11 @@ export function parseChartFiltersFromQuery(query: any): ChartFilters {
 
 
 const DATA_FILES = {
-  twitter: path.join( "reports/twitter/merged_timeline_graph.json"),
-  online: path.join("reports/Op Sindoor_Online_25jun_to_12july.csv"),
-  youtube: path.join( "reports/Op Sindoor_YT_25jun_to_12july.csv"),
+  twitter: path.join("reports/twitter/twitter.csv"),
+  online: path.join("reports/digital.csv"),
+  youtube: path.join("reports/youtube.csv"),
   instagram: path.join("reports/Op Sindoor_Insta_25jun_to_12july.csv"),
-  facebook: path.join("reports/Op Sindoor_FB_25jun_to_12july.csv"),
+  facebook: path.join("reports/facebook.csv"),
 } as const;
 
 export type PlatformKey = keyof typeof DATA_FILES;
@@ -491,6 +619,8 @@ export interface PlatformChartPayload {
     uniqueSources: number;
     totalEngagement: number;
     totalReach: number;
+    /** Sum of post views (Twitter/X only). */
+    totalViews?: number;
     socialMentions: number;
     socialUsers: number;
     webMentions: number;
@@ -1122,7 +1252,12 @@ function trackEntity(
   };
   existing.mentions += 1;
   existing.engagement += engagement;
-  if (extra?.followers != null) existing.followers = extra.followers;
+  if (extra?.followers != null) {
+    existing.followers =
+      existing.followers != null
+        ? Math.max(existing.followers, extra.followers)
+        : extra.followers;
+  }
   if (extra?.views != null) existing.views += extra.views;
   if (extra?.likes != null) existing.likes += extra.likes;
   if (extra?.subLabel && !existing.subLabel) existing.subLabel = extra.subLabel;
@@ -1131,45 +1266,127 @@ function trackEntity(
   map.set(key, existing);
 }
 
-interface TwitterImage {
-  original?: string;
-  local?: string;
-  ok?: boolean;
+/** Shared date parser for unified media CSVs (twitter / digital / youtube / facebook). */
+function parseUnifiedCsvDate(row: Record<string, string>): Date | null {
+  const date = (row.date ?? "").trim();
+  if (!date) return null;
+  const time = (row.time ?? "12:00").trim() || "12:00";
+  const parsed = new Date(`${date}T${time}:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-interface TwitterRecord {
-  username: string;
-  datetime: string;
-  content: string;
-  statusHref?: string;
-  images?: TwitterImage[];
-  stats: {
-    replies?: number;
-    reposts?: number;
-    likes?: number;
-    views?: number;
-  };
+const parseTwitterCsvDate = parseUnifiedCsvDate;
+
+function parseStanceScore(raw: string | undefined | null): SentimentBucket | null {
+  const value = String(raw ?? "").trim();
+  if (!value) return null;
+  const score = Number(value);
+  if (!Number.isFinite(score)) return null;
+  if (score > 0) return "positive";
+  if (score < 0) return "negative";
+  return "neutral";
 }
 
-function twitterPostImage(item: TwitterRecord): string {
-  const images = item.images ?? [];
-  for (const image of images) {
-    const remote = image.original?.trim();
-    if (remote) return remote;
+function resolveUnifiedSentiment(row: Record<string, string>): SentimentBucket {
+  return (
+    parseStanceScore(row.stance) ??
+    inferTwitterSentiment([row.text, row.title, row.summary].filter(Boolean).join(" "))
+  );
+}
+
+const resolveTwitterSentiment = resolveUnifiedSentiment;
+
+function mediaPostImage(row: Record<string, string>): string {
+  return sanitizeHttpUrl(row.media_url) || "";
+}
+
+const twitterPostImage = mediaPostImage;
+
+/** Views column, or reach_claimed_est when exporters put views there. */
+function unifiedRowViews(row: Record<string, string>): number {
+  const views = parseEngagementNumber(row.views);
+  if (views > 0) return views;
+  return parseEngagementNumber(row.reach_claimed_est);
+}
+
+/** True reposts only — CSV often copies `views` into `shares` / `engagement_total`. */
+function twitterShareCount(row: Record<string, string>): number {
+  const reposts = parseEngagementNumber(row.reposts);
+  if (reposts > 0) return reposts;
+
+  const shares = parseEngagementNumber(row.shares);
+  const views = parseEngagementNumber(row.views);
+  // Treat shares as polluted when it matches views (common exporter bug).
+  if (shares > 0 && !(views > 0 && shares === views)) return shares;
+  return 0;
+}
+
+function componentEngagement(row: Record<string, string>): number {
+  return (
+    parseEngagementNumber(row.likes) +
+    parseEngagementNumber(row.comments) +
+    twitterShareCount(row)
+  );
+}
+
+function twitterEngagement(row: Record<string, string>): number {
+  const calculated = componentEngagement(row);
+  const sheetTotal = parseEngagementNumber(row.engagement_total);
+  const views = parseEngagementNumber(row.views);
+  // Prefer component sum; only trust sheet total when it is not a views copy.
+  if (sheetTotal > 0 && !(views > 0 && sheetTotal === views) && sheetTotal >= calculated) {
+    return sheetTotal;
   }
-  return "";
+  return calculated;
+}
+
+/** Non-Twitter media: components first, else engagement_total. */
+function unifiedEngagement(row: Record<string, string>): number {
+  const calculated = componentEngagement(row);
+  if (calculated > 0) return calculated;
+  return parseEngagementNumber(row.engagement_total);
+}
+
+function matchesUnifiedMediaSearch(
+  filters: ChartFilters,
+  row: Record<string, string>
+): boolean {
+  return matchesAdvancedSearch(filters, {
+    content: row.text,
+    title: row.title,
+    author: [row.author, row.author_display_name, row.author_identity]
+      .filter(Boolean)
+      .join(" "),
+    summary: row.summary,
+    url: row.url,
+  });
+}
+
+function buildEngagementBreakdown(
+  likes: number,
+  shares: number,
+  comments: number
+): { name: string; value: number }[] {
+  const parts: { name: string; value: number }[] = [];
+  if (likes > 0) parts.push({ name: "Likes", value: likes });
+  if (shares > 0) parts.push({ name: "Shares", value: shares });
+  if (comments > 0) parts.push({ name: "Comments", value: comments });
+  return parts;
 }
 
 function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
   const { start, end } = resolveFilterRange(filters);
-  const raw = JSON.parse(fs.readFileSync(DATA_FILES.twitter, "utf8")) as TwitterRecord[];
-  const filtered = raw.filter((item) => {
-    const date = new Date(item.datetime);
+  const filtered = readCsv(DATA_FILES.twitter).filter((row) => {
+    const date = parseTwitterCsvDate(row);
     if (!inDateRange(date, start, end)) return false;
     return matchesAdvancedSearch(filters, {
-      content: item.content,
-      author: item.username,
-      url: item.statusHref ? `https://x.com${item.statusHref}` : "",
+      content: row.text,
+      title: row.title,
+      author: [row.author, row.author_display_name, row.author_identity]
+        .filter(Boolean)
+        .join(" "),
+      summary: row.summary,
+      url: row.url,
     });
   });
 
@@ -1187,45 +1404,56 @@ function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
   const users = new Set<string>();
   const posts: (PostItem & { engagement: number })[] = [];
 
-  for (const item of filtered) {
-    const date = new Date(item.datetime);
-    dates.push(date);
-    users.add(item.username);
-    const bucket = inferTwitterSentiment(item.content);
+  for (const row of filtered) {
+    const date = parseTwitterCsvDate(row);
+    if (date) dates.push(date);
+
+    const handle = (row.author ?? "").replace(/^@/, "").trim();
+    if (!handle) continue;
+    users.add(handle);
+
+    const bucket = resolveTwitterSentiment(row);
     sentiment[bucket] += 1;
 
-    const stats = item.stats ?? {};
-    const itemLikes = stats.likes ?? 0;
-    const itemShares = stats.reposts ?? 0;
-    const itemComments = stats.replies ?? 0;
-    const itemViews = stats.views ?? 0;
+    const itemLikes = parseEngagementNumber(row.likes);
+    const itemShares = twitterShareCount(row);
+    const itemComments = parseEngagementNumber(row.comments);
+    const itemViews = parseEngagementNumber(row.views);
+    const engagement = twitterEngagement(row);
+    const followers = parseEngagementNumber(row.author_followers);
+    const displayName = (row.author_display_name ?? "").trim() || handle;
+    const postUrl = sanitizeHttpUrl(row.url);
+    const subLabel = [row.author_category, row.author_identity]
+      .map((part) => (part ?? "").trim())
+      .filter(Boolean)
+      .join(" · ");
 
     likes += itemLikes;
     shares += itemShares;
     comments += itemComments;
     views += itemViews;
 
-    const engagement = itemLikes + itemShares + itemComments;
-    const handle = item.username.replace(/^@/, "");
-    const postUrl = item.statusHref ? `https://x.com${item.statusHref}` : "";
-    trackEntity(handles, handle, handle, `@${handle}`, engagement, bucket, {
-      link: `https://x.com/${handle}`,
+    trackEntity(handles, handle, displayName, `@${handle}`, engagement, bucket, {
+      link: `https://x.com/${encodeURIComponent(handle)}`,
+      followers: followers > 0 ? followers : null,
+      subLabel: subLabel || undefined,
       views: itemViews,
+      likes: itemLikes,
     });
 
     posts.push({
-      name: handle,
+      name: displayName,
       handle: `@${handle}`,
       timestamp: formatPostTimestamp(date),
-      text: trimSnippet(item.content, 170),
-      language: "en",
+      text: trimSnippet(row.text || row.title || "", 170),
+      language: (row.language || "en").trim() || "en",
       sentiment: bucket,
       likes: itemLikes,
       shares: itemShares,
       comments: itemComments,
       views: itemViews,
       url: postUrl,
-      image: twitterPostImage(item),
+      image: twitterPostImage(row),
       engagement,
     });
   }
@@ -1239,7 +1467,8 @@ function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
       totalMentions: filtered.length,
       uniqueSources: users.size,
       totalEngagement: likes + shares + comments,
-      totalReach: views,
+      totalReach: sumEntityFollowers(handles),
+      totalViews: views,
       socialMentions: filtered.length,
       socialUsers: users.size,
       webMentions: 0,
@@ -1247,11 +1476,7 @@ function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
     },
     dailyTimeline: buildDailyTimeline(dates, start, end),
     sentiment: sentimentSeries(sentiment),
-    engagementBreakdown: [
-      { name: "Likes", value: likes },
-      { name: "Shares", value: shares },
-      { name: "Comments", value: comments },
-    ],
+    engagementBreakdown: buildEngagementBreakdown(likes, shares, comments),
     topEntities: buildTopEntities(handles),
     posts: posts
       .sort((a, b) => b.engagement - a.engagement)
@@ -1271,15 +1496,9 @@ function loadTwitterData(filters: ChartFilters = {}): PlatformChartPayload {
 function loadOnlineData(filters: ChartFilters = {}): PlatformChartPayload {
   const { start, end } = resolveFilterRange(filters);
   const rows = readCsv(DATA_FILES.online).filter((row) => {
-    const date = parseDmyDate(row["Date & Time"]);
+    const date = parseUnifiedCsvDate(row);
     if (!inDateRange(date, start, end)) return false;
-    return matchesAdvancedSearch(filters, {
-      title: row.Heading,
-      summary: row.Summary,
-      content: row.Content,
-      author: [row.Publication, row.Authors].filter(Boolean).join(" "),
-      url: row.Links,
-    });
+    return matchesUnifiedMediaSearch(filters, row);
   });
 
   const sentiment: Record<SentimentBucket, number> = {
@@ -1289,33 +1508,49 @@ function loadOnlineData(filters: ChartFilters = {}): PlatformChartPayload {
   };
   const publications = new Map<string, EntityAccumulator>();
   const dates: Date[] = [];
-  const articles: (ArticleItem & { sortDate: number })[] = [];
+  let totalReach = 0;
+  let totalEngagement = 0;
+  const articles: (ArticleItem & { sortDate: number; engagement: number })[] = [];
 
   for (const row of rows) {
-    const date = parseDmyDate(row["Date & Time"]);
+    const date = parseUnifiedCsvDate(row);
     if (date) dates.push(date);
-    const bucket = normalizeSentiment(row.Sentiment);
+    const bucket = resolveUnifiedSentiment(row);
     sentiment[bucket] += 1;
 
-    const articleUrl = parseFirstUrl(row.Links);
-    const domain = extractDomain(articleUrl) || row.Publication?.trim() || "Unknown";
-    const publicationName = row.Publication?.trim() || domain;
-    trackEntity(publications, domain, domain, domain, 1, bucket, {
-      subLabel: publicationName,
+    const articleUrl = parseFirstUrl(row.url);
+    const domain =
+      extractDomain(articleUrl) ||
+      (row.author ?? "").trim() ||
+      "Unknown";
+    const publicationName =
+      (row.author_display_name ?? "").trim() ||
+      (row.author ?? "").trim() ||
+      domain;
+    const engagement = unifiedEngagement(row);
+    const reach = unifiedRowViews(row);
+    totalReach += reach;
+    totalEngagement += engagement;
+
+    trackEntity(publications, domain.toLowerCase(), domain, domain, engagement || 1, bucket, {
+      subLabel: publicationName !== domain ? publicationName : undefined,
       link: articleUrl,
+      views: reach,
+      followers: parseEngagementNumber(row.author_followers) || null,
     });
 
     articles.push({
       domain,
-      title: trimSnippet(row.Heading, 80),
-      snippet: trimSnippet(row.Summary || row.Content, 90),
+      title: trimSnippet(row.title, 80),
+      snippet: trimSnippet(row.summary || row.text, 90),
       timestamp: formatPostTimestamp(date),
-      language: (row.Language?.trim().slice(0, 2) || "en").toLowerCase(),
+      language: (row.language?.trim().slice(0, 2) || "en").toLowerCase(),
       sentiment: bucket,
       rankLabel: "N/A",
-      tag: "news",
+      tag: (row.type || "news").trim() || "news",
       url: articleUrl,
       sortDate: date ? date.getTime() : 0,
+      engagement,
     });
   }
 
@@ -1327,8 +1562,9 @@ function loadOnlineData(filters: ChartFilters = {}): PlatformChartPayload {
     kpis: {
       totalMentions: rows.length,
       uniqueSources: publications.size,
-      totalEngagement: rows.length,
-      totalReach: 0,
+      totalEngagement,
+      totalReach,
+      totalViews: totalReach,
       socialMentions: 0,
       socialUsers: 0,
       webMentions: rows.length,
@@ -1338,9 +1574,9 @@ function loadOnlineData(filters: ChartFilters = {}): PlatformChartPayload {
     sentiment: sentimentSeries(sentiment),
     topEntities: buildTopEntities(publications, 24, "mentions"),
     articles: articles
-      .sort((a, b) => b.sortDate - a.sortDate)
+      .sort((a, b) => b.engagement - a.engagement || b.sortDate - a.sortDate)
       .slice(0, 24)
-      .map(({ sortDate: _sortDate, ...article }) => article),
+      .map(({ sortDate: _sortDate, engagement: _engagement, ...article }) => article),
     chartTypes: {
       timeline: "line",
       sentiment: "pie",
@@ -1354,15 +1590,9 @@ function loadOnlineData(filters: ChartFilters = {}): PlatformChartPayload {
 function loadYouTubeData(filters: ChartFilters = {}): PlatformChartPayload {
   const { start, end } = resolveFilterRange(filters);
   const rows = readCsv(DATA_FILES.youtube).filter((row) => {
-    const date = parseDmyDate(row["Date & Time"]);
+    const date = parseUnifiedCsvDate(row);
     if (!inDateRange(date, start, end)) return false;
-    return matchesAdvancedSearch(filters, {
-      title: row.Headline,
-      author: row.Channel,
-      summary: row.Summary,
-      content: row.Summary,
-      url: row.Link,
-    });
+    return matchesUnifiedMediaSearch(filters, row);
   });
 
   const sentiment: Record<SentimentBucket, number> = {
@@ -1374,51 +1604,61 @@ function loadYouTubeData(filters: ChartFilters = {}): PlatformChartPayload {
   const dates: Date[] = [];
   let likes = 0;
   let comments = 0;
+  let shares = 0;
+  let totalEngagement = 0;
+  let totalViews = 0;
   const videos: (VideoItem & { engagement: number })[] = [];
 
   for (const row of rows) {
-    const date = parseDmyDate(row["Date & Time"]);
+    const date = parseUnifiedCsvDate(row);
     if (date) dates.push(date);
-    const bucket = normalizeSentiment(row.Semetiment ?? row.Sentiment);
+    const bucket = resolveUnifiedSentiment(row);
     sentiment[bucket] += 1;
 
-    const rowLikes = parseEngagementNumber(row.Likes);
-    const rowComments = parseEngagementNumber(row.Comments);
-    likes += rowLikes;
-    comments += rowComments;
+    const rowLikes = parseEngagementNumber(row.likes);
+    const rowComments = parseEngagementNumber(row.comments);
+    const rowShares = twitterShareCount(row);
+    const engagement = unifiedEngagement(row);
+    const views = unifiedRowViews(row);
+    // Sheet often only fills engagement_total — surface that as likes for KPI/cards.
+    const displayLikes = rowLikes > 0 ? rowLikes : engagement;
 
-    const videoUrl = sanitizeHttpUrl(row.Link);
-    const channel = row.Channel?.trim() || "Unknown";
-    trackEntity(
-      channels,
-      channel,
-      channel,
-      channel,
-      rowLikes + rowComments,
-      bucket,
-      {
-        link: videoUrl,
-        likes: rowLikes,
-        followers: lookupFollowers(YOUTUBE_FOLLOWERS, channel),
-      }
-    );
+    likes += displayLikes;
+    comments += rowComments;
+    shares += rowShares;
+    totalEngagement += engagement;
+    totalViews += views;
+
+    const videoUrl = sanitizeHttpUrl(row.url);
+    const channel = (row.author ?? "").trim() || "Unknown";
+    const followers =
+      parseEngagementNumber(row.author_followers) ||
+      lookupFollowers(YOUTUBE_FOLLOWERS, channel);
+
+    trackEntity(channels, channel.toLowerCase(), channel, channel, engagement, bucket, {
+      link: videoUrl,
+      likes: displayLikes,
+      views,
+      followers,
+    });
 
     videos.push({
       channel,
-      title: trimSnippet(row.Headline, 80),
-      snippet: trimSnippet(row.Summary, 90),
+      title: trimSnippet(row.title, 80),
+      snippet: trimSnippet(row.summary || row.text, 90),
       timestamp: formatPostTimestamp(date),
-      language: (row.Language?.trim().slice(0, 2) || "en").toLowerCase(),
+      language: (row.language?.trim().slice(0, 2) || "en").toLowerCase(),
       sentiment: bucket,
-      likes: rowLikes,
+      likes: displayLikes,
       comments: rowComments,
-      views: 0,
+      views,
       url: videoUrl,
-      engagement: rowLikes + rowComments,
+      engagement,
     });
   }
 
   const meta = PLATFORM_META.youtube;
+  const followerReach = sumEntityFollowers(channels);
   return {
     platform: "youtube",
     title: meta.title,
@@ -1426,8 +1666,10 @@ function loadYouTubeData(filters: ChartFilters = {}): PlatformChartPayload {
     kpis: {
       totalMentions: rows.length,
       uniqueSources: channels.size,
-      totalEngagement: likes + comments,
-      totalReach: sumEntityFollowers(channels),
+      totalEngagement,
+      // Prefer follower reach when available; else video views from the sheet.
+      totalReach: followerReach > 0 ? followerReach : totalViews,
+      totalViews,
       socialMentions: rows.length,
       socialUsers: channels.size,
       webMentions: 0,
@@ -1435,13 +1677,10 @@ function loadYouTubeData(filters: ChartFilters = {}): PlatformChartPayload {
     },
     dailyTimeline: buildDailyTimeline(dates, start, end),
     sentiment: sentimentSeries(sentiment),
-    engagementBreakdown: [
-      { name: "Likes", value: likes },
-      { name: "Comments", value: comments },
-    ],
+    engagementBreakdown: buildEngagementBreakdown(likes, shares, comments),
     topEntities: buildTopEntities(channels),
     videos: videos
-      .sort((a, b) => b.engagement - a.engagement)
+      .sort((a, b) => b.engagement - a.engagement || b.views - a.views)
       .slice(0, 24)
       .map(({ engagement: _engagement, ...video }) => video),
     chartTypes: {
@@ -1475,6 +1714,7 @@ function loadInstagramData(filters: ChartFilters = {}): PlatformChartPayload {
   };
   const handles = new Map<string, EntityAccumulator>();
   const dates: Date[] = [];
+  let likes = 0;
   let totalEngagement = 0;
   const posts: (PostItem & { engagement: number })[] = [];
 
@@ -1484,9 +1724,11 @@ function loadInstagramData(filters: ChartFilters = {}): PlatformChartPayload {
     const bucket = normalizeSentiment(row.Sentiment);
     sentiment[bucket] += 1;
 
-    const likes = parseEngagementNumber(row.Likes);
-    const engagement =
-      parseEngagementNumber(row.Engagement) || likes;
+    const itemLikes = parseEngagementNumber(row.Likes);
+    const sheetEngagement = parseEngagementNumber(row.Engagement);
+    // Prefer likes; sheet "Engagement" is inconsistently reach vs interactions.
+    const engagement = itemLikes > 0 ? itemLikes : sheetEngagement;
+    likes += engagement;
     totalEngagement += engagement;
 
     const handle = (row.Handle ?? "").replace(/\s+/g, " ").trim() || "Unknown";
@@ -1498,7 +1740,7 @@ function loadInstagramData(filters: ChartFilters = {}): PlatformChartPayload {
 
     trackEntity(handles, handleKey, handle, `@${handle.replace(/^@/, "")}`, engagement, bucket, {
       link: profileUrl || postUrl,
-      likes,
+      likes: itemLikes,
       followers: lookupFollowers(INSTAGRAM_FOLLOWERS, handleKey),
     });
 
@@ -1509,7 +1751,7 @@ function loadInstagramData(filters: ChartFilters = {}): PlatformChartPayload {
       text: trimSnippet(row.Headline || row.Caption || row.Content || "", 170),
       language: (row.Language || "en").trim() || "en",
       sentiment: bucket,
-      likes,
+      likes: itemLikes,
       shares: 0,
       comments: 0,
       views: 0,
@@ -1535,6 +1777,7 @@ function loadInstagramData(filters: ChartFilters = {}): PlatformChartPayload {
     },
     dailyTimeline: buildDailyTimeline(dates, start, end),
     sentiment: sentimentSeries(sentiment),
+    engagementBreakdown: buildEngagementBreakdown(likes, 0, 0),
     topEntities: buildTopEntities(handles),
     posts: posts
       .sort((a, b) => b.engagement - a.engagement)
@@ -1543,65 +1786,19 @@ function loadInstagramData(filters: ChartFilters = {}): PlatformChartPayload {
     chartTypes: {
       timeline: "line",
       sentiment: "pie",
-      engagement: null,
+      engagement: "bar",
       ranking: "bar",
     },
     accentColor: meta.accentColor,
   };
 }
 
-function excelSerialToDate(serial: number): Date | null {
-  if (!Number.isFinite(serial)) return null;
-  const utcDays = Math.floor(serial - 25569);
-  return new Date(utcDays * 86400 * 1000);
-}
-
-async function loadFacebookData(filters: ChartFilters = {}): Promise<PlatformChartPayload> {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(DATA_FILES.facebook);
-  const sheet = workbook.worksheets[0];
-  const rows: {
-    headline: string;
-    sentiment: string;
-    tags: string;
-    createdAt: unknown;
-    handle: string;
-    language: string;
-    url: string;
-    likes: unknown;
-  }[] = [];
-
-  sheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return;
-    rows.push({
-      headline: String(row.getCell(2).text ?? "").trim(),
-      sentiment: String(row.getCell(3).text ?? "").trim(),
-      tags: String(row.getCell(4).text ?? "").trim(),
-      createdAt: row.getCell(5).value,
-      handle: String(row.getCell(6).text ?? "").trim(),
-      language: String(row.getCell(7).text ?? "").trim(),
-      url: String(row.getCell(8).text ?? "").trim(),
-      likes: row.getCell(9).value,
-    });
-  });
-
-  const parseFacebookDate = (raw: unknown): Date | null => {
-    if (raw instanceof Date) return raw;
-    if (typeof raw === "number") return excelSerialToDate(raw);
-    return parseDotDate(String(raw));
-  };
-
+function loadFacebookData(filters: ChartFilters = {}): PlatformChartPayload {
   const { start, end } = resolveFilterRange(filters);
-  const filtered = rows.filter((row) => {
-    const date = parseFacebookDate(row.createdAt);
+  const filtered = readCsv(DATA_FILES.facebook).filter((row) => {
+    const date = parseUnifiedCsvDate(row);
     if (!inDateRange(date, start, end)) return false;
-    return matchesAdvancedSearch(filters, {
-      title: row.headline,
-      content: row.headline,
-      author: row.handle,
-      tags: row.tags,
-      url: row.url,
-    });
+    return matchesUnifiedMediaSearch(filters, row);
   });
 
   const sentiment: Record<SentimentBucket, number> = {
@@ -1611,39 +1808,58 @@ async function loadFacebookData(filters: ChartFilters = {}): Promise<PlatformCha
   };
   const handles = new Map<string, EntityAccumulator>();
   const dates: Date[] = [];
+  let likes = 0;
+  let comments = 0;
+  let shares = 0;
   let totalEngagement = 0;
   const posts: (PostItem & { engagement: number })[] = [];
 
   for (const row of filtered) {
-    const date = parseFacebookDate(row.createdAt);
+    const date = parseUnifiedCsvDate(row);
     if (date) dates.push(date);
 
-    const bucket = normalizeSentiment(String(row.sentiment));
+    const bucket = resolveUnifiedSentiment(row);
     sentiment[bucket] += 1;
-    const likes = parseEngagementNumber(row.likes as string | number | null | undefined);
-    totalEngagement += likes;
 
-    const handle = String(row.handle || "Unknown").replace(/\s+/g, " ").trim() || "Unknown";
+    const itemLikes = parseEngagementNumber(row.likes);
+    const itemComments = parseEngagementNumber(row.comments);
+    const itemShares = twitterShareCount(row);
+    const engagement = unifiedEngagement(row);
+    likes += itemLikes;
+    comments += itemComments;
+    shares += itemShares;
+    totalEngagement += engagement;
+
+    const handle =
+      (row.author_display_name ?? "").trim() ||
+      (row.author ?? "").trim() ||
+      "Unknown";
+    const handleKey = handle.toLowerCase();
     const postUrl = sanitizeHttpUrl(row.url);
-    trackEntity(handles, handle.toLowerCase(), handle, handle, likes, bucket, {
+    const followers =
+      parseEngagementNumber(row.author_followers) ||
+      lookupFollowers(FACEBOOK_FOLLOWERS, handle);
+
+    trackEntity(handles, handleKey, handle, handle, engagement, bucket, {
       link: postUrl,
-      likes,
-      followers: lookupFollowers(FACEBOOK_FOLLOWERS, handle),
+      likes: itemLikes,
+      followers,
     });
 
     posts.push({
       name: handle,
       handle,
       timestamp: formatPostTimestamp(date),
-      text: trimSnippet(row.headline, 170),
+      text: trimSnippet(row.text || row.title, 170),
       language: (row.language || "en").trim() || "en",
       sentiment: bucket,
-      likes,
-      shares: 0,
-      comments: 0,
-      views: 0,
+      likes: itemLikes,
+      shares: itemShares,
+      comments: itemComments,
+      views: unifiedRowViews(row),
       url: postUrl,
-      engagement: likes,
+      image: mediaPostImage(row),
+      engagement,
     });
   }
 
@@ -1664,6 +1880,7 @@ async function loadFacebookData(filters: ChartFilters = {}): Promise<PlatformCha
     },
     dailyTimeline: buildDailyTimeline(dates, start, end),
     sentiment: sentimentSeries(sentiment),
+    engagementBreakdown: buildEngagementBreakdown(likes, shares, comments),
     topEntities: buildTopEntities(handles),
     posts: posts
       .sort((a, b) => b.engagement - a.engagement)
@@ -1672,7 +1889,7 @@ async function loadFacebookData(filters: ChartFilters = {}): Promise<PlatformCha
     chartTypes: {
       timeline: "line",
       sentiment: "pie",
-      engagement: null,
+      engagement: "bar",
       ranking: "bar",
     },
     accentColor: meta.accentColor,
@@ -1782,99 +1999,46 @@ function collectMentionDocs(filters: ChartFilters): MentionDoc[] {
   const { start, end } = resolveFilterRange(filters);
   const docs: MentionDoc[] = [];
 
-  try {
-    const raw = JSON.parse(fs.readFileSync(DATA_FILES.twitter, "utf8")) as TwitterRecord[];
-    for (const item of raw) {
-      const date = new Date(item.datetime);
+  const pushUnifiedDocs = (
+    filePath: string,
+    engagementFn: (row: Record<string, string>) => number
+  ) => {
+    for (const row of readCsv(filePath)) {
+      const date = parseUnifiedCsvDate(row);
       if (!inDateRange(date, start, end)) continue;
-      if (
-        !matchesAdvancedSearch(filters, {
-          content: item.content,
-          author: item.username,
-          url: item.statusHref ? `https://x.com${item.statusHref}` : "",
-        })
-      ) {
-        continue;
-      }
-      const stats = item.stats ?? {};
-      const likes = stats.likes ?? 0;
-      const shares = stats.reposts ?? 0;
-      const comments = stats.replies ?? 0;
-      const views = stats.views ?? 0;
-      const url = item.statusHref ? `https://x.com${item.statusHref}` : "";
-      if (!item.content) continue;
+      if (!matchesUnifiedMediaSearch(filters, row)) continue;
+      const text = (row.text ?? row.title ?? row.summary ?? "").trim();
+      const url = sanitizeHttpUrl(row.url) || parseFirstUrl(row.url);
+      if (!text) continue;
       docs.push({
-        text: item.content,
+        text,
         url,
-        engagement: likes + shares + comments,
-        views,
-        sentiment: inferTwitterSentiment(item.content),
+        engagement: engagementFn(row),
+        views: unifiedRowViews(row),
+        sentiment: resolveUnifiedSentiment(row),
       });
     }
+  };
+
+  try {
+    pushUnifiedDocs(DATA_FILES.twitter, twitterEngagement);
   } catch {
     /* skip twitter */
   }
-
   try {
-    for (const row of readCsv(DATA_FILES.online)) {
-      const date = parseDmyDate(row["Date & Time"]);
-      if (!inDateRange(date, start, end)) continue;
-      if (
-        !matchesAdvancedSearch(filters, {
-          title: row.Heading,
-          summary: row.Summary,
-          content: row.Content,
-          author: [row.Publication, row.Authors].filter(Boolean).join(" "),
-          url: row.Links,
-        })
-      ) {
-        continue;
-      }
-      const text = [row.Heading, row.Summary, row.Content].filter(Boolean).join(" ");
-      const url = parseFirstUrl(row.Links);
-      if (!text) continue;
-      docs.push({
-        text,
-        url,
-        engagement: 1,
-        views: 0,
-        sentiment: normalizeSentiment(row.Sentiment),
-      });
-    }
+    pushUnifiedDocs(DATA_FILES.online, unifiedEngagement);
   } catch {
     /* skip online */
   }
-
   try {
-    for (const row of readCsv(DATA_FILES.youtube)) {
-      const date = parseDmyDate(row["Date & Time"]);
-      if (!inDateRange(date, start, end)) continue;
-      if (
-        !matchesAdvancedSearch(filters, {
-          title: row.Headline,
-          author: row.Channel,
-          summary: row.Summary,
-          content: row.Summary,
-          url: row.Link,
-        })
-      ) {
-        continue;
-      }
-      const text = [row.Headline, row.Summary].filter(Boolean).join(" ");
-      const url = sanitizeHttpUrl(row.Link);
-      const likes = parseEngagementNumber(row.Likes);
-      const comments = parseEngagementNumber(row.Comments);
-      if (!text) continue;
-      docs.push({
-        text,
-        url,
-        engagement: likes + comments,
-        views: 0,
-        sentiment: normalizeSentiment(row.Semetiment ?? row.Sentiment),
-      });
-    }
+    pushUnifiedDocs(DATA_FILES.youtube, unifiedEngagement);
   } catch {
     /* skip youtube */
+  }
+  try {
+    pushUnifiedDocs(DATA_FILES.facebook, unifiedEngagement);
+  } catch {
+    /* skip facebook */
   }
 
   return docs;
